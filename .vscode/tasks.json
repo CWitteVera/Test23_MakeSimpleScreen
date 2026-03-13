@@ -1,0 +1,42 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ESP-IDF: Set Target esp32s3",
+      "type": "shell",
+      "command": "idf.py",
+      "args": ["set-target", "esp32s3"],
+      "group": "build"
+    },
+    {
+      "label": "ESP-IDF: Update Dependencies",
+      "type": "shell",
+      "command": "idf.py",
+      "args": ["update-dependencies"],
+      "group": "build"
+    },
+    {
+      "label": "ESP-IDF: Build",
+      "type": "shell",
+      "command": "idf.py",
+      "args": ["build"],
+      "group": "build",
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "ESP-IDF: Flash+Monitor",
+      "type": "shell",
+      "command": "idf.py",
+      "args": ["-p", "${input:serialPort}", "flash", "monitor"],
+      "group": "build"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "serialPort",
+      "type": "promptString",
+      "description": "Serial port (example COM5)",
+      "default": "COM5"
+    }
+  ]
+}
