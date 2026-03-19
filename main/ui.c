@@ -2,15 +2,23 @@
  * ui.c – 3×3 grid of fill-bar sliders with individual decay-rate selectors
  *
  * Nine cells are evenly spread in a 3×3 grid.  Each cell shows:
+ *   • A zone label at the top of the cell.
  *   • A horizontal fill-bar slider whose indicator colour reflects the value.
  *     The slider is draggable left/right.  The knob is invisible so only the
  *     coloured fill bar is shown.  A shimmer stripe sweeps across the bar in
  *     the fill direction, creating a "charging battery" wave effect.
- *   • Three square buttons (80×80 px) labeled 0 / 1 / 2 that select how
+ *   • Three rectangular buttons (80×50 px) labeled 0 / 1 / 2 that select how
  *     quickly the bar returns to zero automatically:
  *       0 – no automatic decrease
  *       1 – decrease by 1 unit every 2 seconds
  *       2 – decrease by 1 unit every second
+ *
+ * Zone labels per row:
+ *   Top row    (left → right): Zone 1, Zone 2, Zone 3
+ *   Middle row (left → right): Zone 3, Zone 2, Zone 1
+ *   Bottom row (left → right): Zone 1, Zone 2, Zone 3
+ *
+ * A 20 px left strip shows vertical row labels: 3rd Level / 2nd Level / 1st Level.
  *
  * Colour mapping (smooth gradient):
  *    0–20  : solid green
@@ -29,7 +37,11 @@
 /* ── constants ──────────────────────────────────────────────────────── */
 #define BAR_COUNT  9
 #define GRID_COLS  3
+#define GRID_ROWS  3
 #define VALUE_MAX  40
+
+/* Left-strip width for row level labels */
+#define LEFT_STRIP_W       20
 
 /* Slider bar dimensions */
 #define SLIDER_H            60    /* bar height in pixels                        */
@@ -40,13 +52,34 @@
 #define SHIMMER_PERIOD   1400    /* ms for one complete sweep                   */
 #define SHIMMER_STAGGER   155    /* ms delay between successive bars (≈ SHIMMER_PERIOD/9) */
 
-/* Square selector button */
-#define SQBTN_SIZE         80    /* side length in pixels (2× the old 40 px)    */
+/* Rectangular selector button */
+#define SQBTN_W            80    /* button width  in pixels                     */
+#define SQBTN_H            50    /* button height in pixels (reduced for label) */
 
 /* Shared label colour for selector buttons */
 #define SQBTN_LABEL_R     220
 #define SQBTN_LABEL_G     220
 #define SQBTN_LABEL_B     220
+
+/* Zone name per cell index (row-major order, 0–8) */
+static const char *s_zone_names[BAR_COUNT] = {
+    "Zone 1", "Zone 2", "Zone 3",   /* row 0: top,    left → right */
+    "Zone 3", "Zone 2", "Zone 1",   /* row 1: middle, left → right */
+    "Zone 1", "Zone 2", "Zone 3",   /* row 2: bottom, left → right */
+};
+
+/*
+ * Vertical text for the 20 px left strip.
+ * Each character is placed on its own line so the label fits in the 20 px
+ * width without requiring LVGL transform rotation (which does not affect the
+ * layout bounding box and would be clipped by the parent container).
+ * Row order top → bottom: 3rd Level, 2nd Level, 1st Level.
+ */
+static const char *s_level_vtext[GRID_ROWS] = {
+    "3\nr\nd\n \nL\ne\nv\ne\nl",   /* 3rd Level */
+    "2\nn\nd\n \nL\ne\nv\ne\nl",   /* 2nd Level */
+    "1\ns\nt\n \nL\ne\nv\ne\nl",   /* 1st Level */
+};
 
 /* ── per-cell state ─────────────────────────────────────────────────── */
 typedef struct {
@@ -248,7 +281,29 @@ void app_ui_init(void)
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(scr, bg_blue(), 0);
 
-    /* ── 3×3 grid container ────────────────────────────────────────── */
+    /* ── Left strip: 20 px wide, full height, vertical level labels ── */
+    lv_obj_t *left_strip = lv_obj_create(scr);
+    lv_obj_set_size(left_strip, LEFT_STRIP_W, 480);
+    lv_obj_set_pos(left_strip, 0, 0);
+    lv_obj_set_style_bg_opa(left_strip, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(left_strip, 0, 0);
+    lv_obj_set_style_pad_all(left_strip, 0, 0);
+    lv_obj_clear_flag(left_strip, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_layout(left_strip, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(left_strip, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(left_strip,
+                          LV_FLEX_ALIGN_SPACE_EVENLY,
+                          LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+
+    for (int row_idx = 0; row_idx < GRID_ROWS; row_idx++) {
+        lv_obj_t *lvl_lbl = lv_label_create(left_strip);
+        lv_label_set_text(lvl_lbl, s_level_vtext[row_idx]);
+        lv_obj_set_style_text_color(lvl_lbl, lv_color_white(), 0);
+        lv_obj_set_style_text_align(lvl_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    }
+
+    /* ── 3×3 grid container (shifted right by LEFT_STRIP_W) ────────── */
     static lv_coord_t col_dsc[] = {
         LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST
     };
@@ -257,8 +312,8 @@ void app_ui_init(void)
     };
 
     lv_obj_t *grid = lv_obj_create(scr);
-    lv_obj_set_size(grid, 800, 480);
-    lv_obj_set_pos(grid, 0, 0);
+    lv_obj_set_size(grid, 800 - LEFT_STRIP_W, 480);
+    lv_obj_set_pos(grid, LEFT_STRIP_W, 0);
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(grid, 0, 0);
     lv_obj_set_style_pad_all(grid, 4, 0);
@@ -294,6 +349,13 @@ void app_ui_init(void)
                               LV_FLEX_ALIGN_SPACE_BETWEEN,
                               LV_FLEX_ALIGN_CENTER,
                               LV_FLEX_ALIGN_CENTER);
+
+        /* ── Zone label at top of cell ─────────────────────────────── */
+        lv_obj_t *zone_lbl = lv_label_create(cell);
+        lv_label_set_text(zone_lbl, s_zone_names[i]);
+        lv_obj_set_style_text_color(zone_lbl, lv_color_white(), 0);
+        lv_obj_set_style_text_align(zone_lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(zone_lbl, lv_pct(100));
 
         /* ── Horizontal fill-bar slider ────────────────────────────── */
         lv_obj_t *slider = lv_slider_create(cell);
@@ -339,9 +401,9 @@ void app_ui_init(void)
                               LV_FLEX_ALIGN_CENTER);
 
         for (int r = 0; r < 3; r++) {
-            /* Square button (SQBTN_SIZE × SQBTN_SIZE) with label centered inside */
+            /* Rectangular button (SQBTN_W × SQBTN_H) with label centered inside */
             lv_obj_t *rb = lv_obj_create(radio_row);
-            lv_obj_set_size(rb, SQBTN_SIZE, SQBTN_SIZE);
+            lv_obj_set_size(rb, SQBTN_W, SQBTN_H);
             lv_obj_set_style_radius(rb, 0, LV_PART_MAIN);
             lv_obj_set_style_bg_color(rb, lv_color_make(50, 50, 70),
                                       LV_PART_MAIN);
