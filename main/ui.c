@@ -18,7 +18,7 @@
  *   Middle row (left → right): Zone 3, Zone 2, Zone 1
  *   Bottom row (left → right): Zone 1, Zone 2, Zone 3
  *
- * A 20 px left strip shows vertical row labels: 3rd Level / 2nd Level / 1st Level.
+ * A left strip shows vertical row labels: 3rd Level / 2nd Level / 1st Level.
  *
  * Colour mapping (smooth gradient):
  *    0–20  : solid green
@@ -33,6 +33,7 @@
 
 #include "ui.h"
 #include "lvgl.h"
+#include "lvgl_port.h"
 
 /* ── constants ──────────────────────────────────────────────────────── */
 #define BAR_COUNT  9
@@ -41,16 +42,16 @@
 #define VALUE_MAX  40
 
 /* Left-strip width for row level labels */
-#define LEFT_STRIP_W       20
+#define LEFT_STRIP_W       40
 
 /* Slider bar dimensions */
 #define SLIDER_H            60    /* bar height in pixels                        */
-#define SLIDER_W_SWEEP     290    /* sweep end x-value (≥ actual slider width)   */
+#define SLIDER_W_SWEEP     260    /* estimated max slider width (≥ actual)       */
 
-/* Shimmer ("charging battery" wave) */
+/* Shimmer ("charging battery" wave) – timer-driven, clipped to fill extent */
 #define SHIMMER_W          36    /* width of the sweeping stripe (pixels)       */
-#define SHIMMER_PERIOD   1400    /* ms for one complete sweep                   */
-#define SHIMMER_STAGGER   155    /* ms delay between successive bars (≈ SHIMMER_PERIOD/9) */
+#define SHIMMER_TICK_MS    40    /* timer interval in ms (~25 fps)              */
+#define SHIMMER_PX_PER_TICK  5  /* pixels advanced per tick (~125 px/s)        */
 
 /* Rectangular selector button */
 #define SQBTN_W            80    /* button width  in pixels                     */
@@ -69,8 +70,8 @@ static const char *s_zone_names[BAR_COUNT] = {
 };
 
 /*
- * Vertical text for the 20 px left strip.
- * Each character is placed on its own line so the label fits in the 20 px
+ * Vertical text for the left strip.
+ * Each character is placed on its own line so the label fits in the narrow
  * width without requiring LVGL transform rotation (which does not affect the
  * layout bounding box and would be clipped by the parent container).
  * Row order top → bottom: 3rd Level, 2nd Level, 1st Level.
@@ -83,17 +84,22 @@ static const char *s_level_vtext[GRID_ROWS] = {
 
 /* ── per-cell state ─────────────────────────────────────────────────── */
 typedef struct {
-    lv_obj_t *slider;       /* horizontal fill-bar slider */
-    lv_obj_t *radio[3];     /* radio buttons for decay rates 0, 1, 2 */
+    lv_obj_t *slider;        /* horizontal fill-bar slider */
+    lv_obj_t *radio[3];      /* radio buttons for decay rates 0, 1, 2 */
     int32_t   value;
-    int       decay_rate;   /* 0 = none, 1 = −1/2 s, 2 = −1/s */
+    int       decay_rate;    /* 0 = none, 1 = −1/2 s, 2 = −1/s */
+    lv_obj_t *shimmer_clip;  /* clipping container over the fill region */
+    lv_obj_t *shimmer_stripe;/* the sweeping stripe inside the clip */
+    int32_t   shimmer_x;     /* current stripe x in clip-relative pixels */
+    bool      shimmer_rtl;   /* true for RTL (middle row) bars */
 } bar_cell_t;
 
 static bar_cell_t  s_cells[BAR_COUNT];
-static lv_timer_t *s_flash_timer = NULL;
-static bool        s_flash_state = false;
-static lv_timer_t *s_decay_timer = NULL;
-static uint32_t    s_decay_tick  = 0;
+static lv_timer_t *s_flash_timer   = NULL;
+static bool        s_flash_state   = false;
+static lv_timer_t *s_decay_timer   = NULL;
+static uint32_t    s_decay_tick    = 0;
+static lv_timer_t *s_shimmer_timer = NULL;
 
 /* ── colour helpers ─────────────────────────────────────────────────── */
 static lv_color_t bg_blue(void)
@@ -231,45 +237,90 @@ static void decay_cb(lv_timer_t *t)
 
 /* ── shimmer / wave animation ────────────────────────────────────────── */
 
-/* Animation exec callback: sets the x position of the shimmer stripe */
-static void shimmer_exec_cb(void *obj, int32_t x)
+/*
+ * Periodic timer that advances every shimmer stripe by SHIMMER_PX_PER_TICK
+ * pixels in the fill direction, clipped to the current fill extent so the
+ * wave never extends beyond the highlighted portion of the bar.
+ */
+static void shimmer_timer_cb(lv_timer_t *t)
 {
-    lv_obj_set_x((lv_obj_t *)obj, x);
+    (void)t;
+    for (int i = 0; i < BAR_COUNT; i++) {
+        int32_t sw = lv_obj_get_width(s_cells[i].slider);
+        if (sw <= 0) continue;
+
+        int32_t fill_w = (int32_t)((int64_t)sw * s_cells[i].value / VALUE_MAX);
+
+        /* Resize/reposition the clip container to cover only the fill region */
+        if (s_cells[i].shimmer_rtl) {
+            lv_obj_set_pos(s_cells[i].shimmer_clip, sw - fill_w, 0);
+        } else {
+            lv_obj_set_pos(s_cells[i].shimmer_clip, 0, 0);
+        }
+        lv_obj_set_size(s_cells[i].shimmer_clip, fill_w, SLIDER_H);
+
+        if (fill_w <= 0) continue;
+
+        /* Advance the stripe and wrap when it exits the fill area */
+        if (s_cells[i].shimmer_rtl) {
+            s_cells[i].shimmer_x -= SHIMMER_PX_PER_TICK;
+            if (s_cells[i].shimmer_x < -(int32_t)SHIMMER_W) {
+                s_cells[i].shimmer_x = fill_w;   /* re-enter from right edge */
+            }
+        } else {
+            s_cells[i].shimmer_x += SHIMMER_PX_PER_TICK;
+            if (s_cells[i].shimmer_x > fill_w) {
+                s_cells[i].shimmer_x = -(int32_t)SHIMMER_W; /* re-enter from left */
+            }
+        }
+        lv_obj_set_x(s_cells[i].shimmer_stripe, s_cells[i].shimmer_x);
+    }
 }
 
 /*
- * Add a semi-transparent stripe that sweeps across the slider bar in the
- * fill direction, giving a "charging battery" pulse effect.
- * rtl=true  → stripe moves right-to-left  (middle row which fills RTL)
- * rtl=false → stripe moves left-to-right
- * idx is used to stagger the start delay so bars don't all pulse in sync.
+ * Create the shimmer clip container and stripe for cell idx.
+ * The clip container is a child of the slider and is resized each timer tick
+ * to cover only the filled portion, clipping the stripe to that region.
+ * rtl=true → fill grows right-to-left (middle row).
+ * idx is used to stagger initial stripe positions across bars.
  */
 static void add_shimmer(lv_obj_t *slider, int idx, bool rtl)
 {
-    lv_obj_t *sh = lv_obj_create(slider);
+    /* Clip container – positioned and sized over the fill region (initially 0 wide) */
+    lv_obj_t *clip = lv_obj_create(slider);
+    lv_obj_add_flag(clip, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_clear_flag(clip, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE
+                             | LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+    lv_obj_set_size(clip, 0, SLIDER_H);
+    lv_obj_set_pos(clip, 0, 0);
+    lv_obj_set_style_bg_opa(clip, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(clip, 0, 0);
+    lv_obj_set_style_radius(clip, 0, 0);
+    lv_obj_set_style_pad_all(clip, 0, 0);
+
+    /* Shimmer stripe – child of clip, so it is clipped to the fill region */
+    lv_obj_t *sh = lv_obj_create(clip);
     lv_obj_add_flag(sh, LV_OBJ_FLAG_IGNORE_LAYOUT);
     lv_obj_clear_flag(sh, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(sh, SHIMMER_W, SLIDER_H);
-    lv_obj_set_y(sh, 0);
     lv_obj_set_style_bg_color(sh, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(sh, LV_OPA_30, 0);
     lv_obj_set_style_border_width(sh, 0, 0);
     lv_obj_set_style_radius(sh, 0, 0);
+    lv_obj_set_style_pad_all(sh, 0, 0);
 
-    /* Sweep from the leading edge to the trailing edge of the bar */
-    int32_t x_start = rtl ?  SLIDER_W_SWEEP : -(SHIMMER_W + 4);
-    int32_t x_end   = rtl ? -(SHIMMER_W + 4) :  SLIDER_W_SWEEP;
+    /* Stagger initial x so bars don't all pulse in sync */
+    int32_t span    = SLIDER_W_SWEEP + SHIMMER_W;
+    int32_t stagger = span / BAR_COUNT;
+    int32_t init_x  = rtl
+        ? SLIDER_W_SWEEP - (int32_t)idx * stagger
+        : -(int32_t)SHIMMER_W + (int32_t)idx * stagger;
+    lv_obj_set_x(sh, init_x);
 
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, sh);
-    lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)shimmer_exec_cb);
-    lv_anim_set_values(&a, x_start, x_end);
-    lv_anim_set_time(&a, SHIMMER_PERIOD);
-    lv_anim_set_delay(&a, (uint32_t)idx * SHIMMER_STAGGER);   /* stagger across 9 bars */
-    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-    lv_anim_set_path_cb(&a, lv_anim_path_linear);
-    lv_anim_start(&a);
+    s_cells[idx].shimmer_clip   = clip;
+    s_cells[idx].shimmer_stripe = sh;
+    s_cells[idx].shimmer_x      = init_x;
+    s_cells[idx].shimmer_rtl    = rtl;
 }
 
 /* ── public API ──────────────────────────────────────────────────────── */
@@ -281,26 +332,45 @@ void app_ui_init(void)
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(scr, bg_blue(), 0);
 
-    /* ── Left strip: 20 px wide, full height, vertical level labels ── */
+    /* Row background colours – three distinct blue shades, one per level */
+    lv_color_t row_bg_colors[GRID_ROWS];
+    row_bg_colors[0] = lv_color_make(20,  45, 100);   /* 3rd Level – deep navy   */
+    row_bg_colors[1] = lv_color_make(20,  75, 135);   /* 2nd Level – mid blue    */
+    row_bg_colors[2] = lv_color_make(18, 110, 165);   /* 1st Level – steel blue  */
+
+    lv_color_t row_border_colors[GRID_ROWS];
+    row_border_colors[0] = lv_color_make(50,  75, 135);
+    row_border_colors[1] = lv_color_make(45, 105, 165);
+    row_border_colors[2] = lv_color_make(40, 140, 195);
+
+    /* ── Left strip: LEFT_STRIP_W px wide, full height, one coloured band per level ── */
     lv_obj_t *left_strip = lv_obj_create(scr);
-    lv_obj_set_size(left_strip, LEFT_STRIP_W, 480);
+    lv_obj_set_size(left_strip, LEFT_STRIP_W, LVGL_PORT_V_RES);
     lv_obj_set_pos(left_strip, 0, 0);
     lv_obj_set_style_bg_opa(left_strip, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(left_strip, 0, 0);
     lv_obj_set_style_pad_all(left_strip, 0, 0);
     lv_obj_clear_flag(left_strip, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_layout(left_strip, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(left_strip, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(left_strip,
-                          LV_FLEX_ALIGN_SPACE_EVENLY,
-                          LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
+    /* No layout – children are positioned manually */
 
+    lv_coord_t seg_h = LVGL_PORT_V_RES / GRID_ROWS;   /* one band per level row */
     for (int row_idx = 0; row_idx < GRID_ROWS; row_idx++) {
-        lv_obj_t *lvl_lbl = lv_label_create(left_strip);
+        lv_obj_t *seg = lv_obj_create(left_strip);
+        lv_obj_add_flag(seg, LV_OBJ_FLAG_IGNORE_LAYOUT);
+        lv_obj_clear_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_pos(seg, 0, row_idx * seg_h);
+        lv_obj_set_size(seg, LEFT_STRIP_W, seg_h);
+        lv_obj_set_style_bg_color(seg, row_bg_colors[row_idx], 0);
+        lv_obj_set_style_bg_opa(seg, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(seg, 0, 0);
+        lv_obj_set_style_pad_all(seg, 0, 0);
+        lv_obj_set_style_radius(seg, 0, 0);
+
+        lv_obj_t *lvl_lbl = lv_label_create(seg);
         lv_label_set_text(lvl_lbl, s_level_vtext[row_idx]);
         lv_obj_set_style_text_color(lvl_lbl, lv_color_white(), 0);
         lv_obj_set_style_text_align(lvl_lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_center(lvl_lbl);
     }
 
     /* ── 3×3 grid container (shifted right by LEFT_STRIP_W) ────────── */
@@ -312,7 +382,7 @@ void app_ui_init(void)
     };
 
     lv_obj_t *grid = lv_obj_create(scr);
-    lv_obj_set_size(grid, 800 - LEFT_STRIP_W, 480);
+    lv_obj_set_size(grid, LVGL_PORT_H_RES - LEFT_STRIP_W, LVGL_PORT_V_RES);
     lv_obj_set_pos(grid, LEFT_STRIP_W, 0);
     lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(grid, 0, 0);
@@ -338,8 +408,8 @@ void app_ui_init(void)
                              LV_GRID_ALIGN_STRETCH, col, 1,
                              LV_GRID_ALIGN_STRETCH, row, 1);
         lv_obj_set_style_pad_all(cell, 4, 0);
-        lv_obj_set_style_bg_color(cell, lv_color_make(30, 30, 50), 0);
-        lv_obj_set_style_border_color(cell, lv_color_make(60, 60, 90), 0);
+        lv_obj_set_style_bg_color(cell, row_bg_colors[row], 0);
+        lv_obj_set_style_border_color(cell, row_border_colors[row], 0);
         lv_obj_set_style_border_width(cell, 1, 0);
         lv_obj_set_style_radius(cell, 4, 0);
         lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
@@ -434,4 +504,7 @@ void app_ui_init(void)
 
     /* ── Decay timer: fires every 1 second ────────────────────────── */
     s_decay_timer = lv_timer_create(decay_cb, 1000, NULL);
+
+    /* ── Shimmer timer: advances the wave stripes at ~25 fps ────── */
+    s_shimmer_timer = lv_timer_create(shimmer_timer_cb, SHIMMER_TICK_MS, NULL);
 }
