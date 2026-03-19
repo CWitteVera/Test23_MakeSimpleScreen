@@ -236,7 +236,7 @@ void app_ui_init(void)
 
         /* ── Horizontal fill-bar slider (twice the previous height) ─── */
         lv_obj_t *slider = lv_slider_create(cell);
-        lv_obj_set_size(slider, lv_pct(100), 60);
+        lv_obj_set_size(slider, lv_pct(100), 90);
         lv_slider_set_range(slider, 0, VALUE_MAX);
         lv_slider_set_value(slider, 0, LV_ANIM_OFF);
         /* Track (empty portion) */
@@ -250,6 +250,10 @@ void app_ui_init(void)
         /* Knob – made invisible so only the fill bar is visible */
         lv_obj_set_style_opa(slider, LV_OPA_TRANSP, LV_PART_KNOB);
         lv_obj_set_style_pad_all(slider, 0, LV_PART_KNOB);
+        /* Mirror fill direction for middle row (indices 3–5) */
+        if (row == 1) {
+            lv_obj_set_style_base_dir(slider, LV_BASE_DIR_RTL, 0);
+        }
         lv_obj_add_event_cb(slider, slider_changed_cb, LV_EVENT_VALUE_CHANGED,
                             (void *)(intptr_t)i);
         s_cells[i].slider = slider;
@@ -274,6 +278,8 @@ void app_ui_init(void)
             lv_checkbox_set_text(rb, radio_labels[r]);
             /* Style indicator as a radio button (circular) */
             lv_obj_set_style_radius(rb, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+            lv_obj_set_style_width(rb, 40, LV_PART_INDICATOR);
+            lv_obj_set_style_height(rb, 40, LV_PART_INDICATOR);
             lv_obj_set_style_bg_color(rb, lv_color_make(50, 50, 70),
                                       LV_PART_INDICATOR);
             lv_obj_set_style_bg_color(rb, lv_color_make(100, 200, 100),
