@@ -1,12 +1,15 @@
 /*
- * ui.c – 3×3 grid of fill-bar sliders with individual brightness inputs
+ * ui.c – 3×3 grid of fill-bar sliders with individual decay-rate selectors
  *
  * Nine cells are evenly spread in a 3×3 grid.  Each cell shows:
- *   • A horizontal fill-bar slider whose indicator colour reflects the value.
- *     The slider is draggable – slide left/right to change the brightness.
+ *   • A horizontal fill-bar slider (twice the previous height) whose indicator
+ *     colour reflects the value.  The slider is draggable left/right.
  *     The knob is invisible so only the coloured fill bar is shown.
- *   • A spinbox row (−  value  +) for entering a brightness in 0–40.
- *     Both controls stay in sync with each other.
+ *   • Three radio buttons labeled 0 / 1 / 2 that select how quickly the bar
+ *     returns to zero automatically:
+ *       0 – no automatic decrease
+ *       1 – decrease by 1 unit every 2 seconds
+ *       2 – decrease by 1 unit every second
  *
  * Colour mapping (smooth gradient):
  *    0–20  : solid green
@@ -29,14 +32,17 @@
 
 /* ── per-cell state ─────────────────────────────────────────────────── */
 typedef struct {
-    lv_obj_t *slider;   /* horizontal fill-bar slider */
-    lv_obj_t *spinbox;
+    lv_obj_t *slider;       /* horizontal fill-bar slider */
+    lv_obj_t *radio[3];     /* radio buttons for decay rates 0, 1, 2 */
     int32_t   value;
+    int       decay_rate;   /* 0 = none, 1 = −1/2 s, 2 = −1/s */
 } bar_cell_t;
 
 static bar_cell_t  s_cells[BAR_COUNT];
 static lv_timer_t *s_flash_timer = NULL;
 static bool        s_flash_state = false;
+static lv_timer_t *s_decay_timer = NULL;
+static uint32_t    s_decay_tick  = 0;
 
 /* ── colour helpers ─────────────────────────────────────────────────── */
 static lv_color_t bg_blue(void)
@@ -125,38 +131,50 @@ static void slider_changed_cb(lv_event_t *e)
     int32_t new_val = lv_slider_get_value(s_cells[idx].slider);
     if (new_val == s_cells[idx].value) return;   /* already in sync */
     s_cells[idx].value = new_val;
-    lv_spinbox_set_value(s_cells[idx].spinbox, new_val);
     update_cell(idx);
 }
 
-/* Called when spinbox text value changes (after any increment / decrement) */
-static void spinbox_changed_cb(lv_event_t *e)
+/* Called when a radio button is tapped – enforces mutual exclusivity */
+static void radio_cb(lv_event_t *e)
 {
-    int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    int32_t new_val = lv_spinbox_get_value(s_cells[idx].spinbox);
-    if (new_val == s_cells[idx].value) return;   /* already in sync */
-    s_cells[idx].value = new_val;
-    lv_slider_set_value(s_cells[idx].slider, new_val, LV_ANIM_OFF);
-    update_cell(idx);
-}
+    uint32_t ud = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
+    int cell_idx  = (int)(ud >> 16);
+    int radio_idx = (int)(ud & 0xFFFFu);
 
-static void spinbox_inc_cb(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_SHORT_CLICKED || code == LV_EVENT_LONG_PRESSED_REPEAT) {
-        int idx = (int)(intptr_t)lv_event_get_user_data(e);
-        lv_spinbox_increment(s_cells[idx].spinbox);
-        /* spinbox_changed_cb fires via LV_EVENT_VALUE_CHANGED and syncs everything */
+    s_cells[cell_idx].decay_rate = radio_idx;
+
+    /* Ensure exactly the selected button is checked */
+    for (int r = 0; r < 3; r++) {
+        if (r == radio_idx) {
+            lv_obj_add_state(s_cells[cell_idx].radio[r], LV_STATE_CHECKED);
+        } else {
+            lv_obj_clear_state(s_cells[cell_idx].radio[r], LV_STATE_CHECKED);
+        }
     }
 }
 
-static void spinbox_dec_cb(lv_event_t *e)
+/* 1-second periodic timer – decrements bar values according to decay rate */
+static void decay_cb(lv_timer_t *t)
 {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_SHORT_CLICKED || code == LV_EVENT_LONG_PRESSED_REPEAT) {
-        int idx = (int)(intptr_t)lv_event_get_user_data(e);
-        lv_spinbox_decrement(s_cells[idx].spinbox);
-        /* spinbox_changed_cb fires via LV_EVENT_VALUE_CHANGED and syncs everything */
+    (void)t;
+    s_decay_tick++;
+
+    for (int i = 0; i < BAR_COUNT; i++) {
+        if (s_cells[i].value <= 0) continue;
+
+        bool do_dec = false;
+        if (s_cells[i].decay_rate == 2) {
+            do_dec = true;                          /* −1 every second */
+        } else if (s_cells[i].decay_rate == 1 && (s_decay_tick & 1u) == 0u) {
+            do_dec = true;                          /* −1 every 2 seconds */
+        }
+
+        if (do_dec) {
+            s_cells[i].value--;
+            if (s_cells[i].value < 0) s_cells[i].value = 0;
+            lv_slider_set_value(s_cells[i].slider, s_cells[i].value, LV_ANIM_OFF);
+            update_cell(i);
+        }
     }
 }
 
@@ -189,11 +207,14 @@ void app_ui_init(void)
     lv_obj_set_layout(grid, LV_LAYOUT_GRID);
     lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);
 
+    static const char *radio_labels[] = {"0", "1", "2"};
+
     for (int i = 0; i < BAR_COUNT; i++) {
         int col = i % GRID_COLS;
         int row = i / GRID_COLS;
 
-        s_cells[i].value = 0;
+        s_cells[i].value      = 0;
+        s_cells[i].decay_rate = 0;
 
         /* ── Cell container ───────────────────────────────────────── */
         lv_obj_t *cell = lv_obj_create(grid);
@@ -213,10 +234,9 @@ void app_ui_init(void)
                               LV_FLEX_ALIGN_CENTER,
                               LV_FLEX_ALIGN_CENTER);
 
-        /* ── Horizontal fill-bar slider ─────────────────────────────── */
+        /* ── Horizontal fill-bar slider (twice the previous height) ─── */
         lv_obj_t *slider = lv_slider_create(cell);
-        /* Full width, fixed height renders as a horizontal slider */
-        lv_obj_set_size(slider, lv_pct(100), 30);
+        lv_obj_set_size(slider, lv_pct(100), 60);
         lv_slider_set_range(slider, 0, VALUE_MAX);
         lv_slider_set_value(slider, 0, LV_ANIM_OFF);
         /* Track (empty portion) */
@@ -234,47 +254,45 @@ void app_ui_init(void)
                             (void *)(intptr_t)i);
         s_cells[i].slider = slider;
 
-        /* ── Spinbox row  [−] [value] [+] ────────────────────────── */
-        lv_obj_t *row_cont = lv_obj_create(cell);
-        lv_obj_set_size(row_cont, lv_pct(100), LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_opa(row_cont, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(row_cont, 0, 0);
-        lv_obj_set_style_pad_all(row_cont, 2, 0);
-        lv_obj_set_style_pad_column(row_cont, 4, 0);
-        lv_obj_clear_flag(row_cont, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_layout(row_cont, LV_LAYOUT_FLEX);
-        lv_obj_set_flex_flow(row_cont, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row_cont,
-                              LV_FLEX_ALIGN_CENTER,
+        /* ── Radio-button row (decay rate 0 / 1 / 2) ─────────────── */
+        lv_obj_t *radio_row = lv_obj_create(cell);
+        lv_obj_set_size(radio_row, lv_pct(100), LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_opa(radio_row, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(radio_row, 0, 0);
+        lv_obj_set_style_pad_all(radio_row, 2, 0);
+        lv_obj_set_style_pad_column(radio_row, 6, 0);
+        lv_obj_clear_flag(radio_row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_layout(radio_row, LV_LAYOUT_FLEX);
+        lv_obj_set_flex_flow(radio_row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(radio_row,
+                              LV_FLEX_ALIGN_SPACE_EVENLY,
                               LV_FLEX_ALIGN_CENTER,
                               LV_FLEX_ALIGN_CENTER);
 
-        /* − button */
-        lv_obj_t *btn_dec = lv_btn_create(row_cont);
-        lv_obj_set_size(btn_dec, 34, 34);
-        lv_obj_add_event_cb(btn_dec, spinbox_dec_cb, LV_EVENT_ALL,
-                            (void *)(intptr_t)i);
-        lv_obj_t *lbl_dec = lv_label_create(btn_dec);
-        lv_label_set_text(lbl_dec, LV_SYMBOL_MINUS);
-        lv_obj_center(lbl_dec);
-
-        /* Spinbox */
-        lv_obj_t *sb = lv_spinbox_create(row_cont);
-        lv_spinbox_set_range(sb, 0, VALUE_MAX);
-        lv_spinbox_set_digit_format(sb, 2, 0);
-        lv_spinbox_set_value(sb, 0);
-        lv_obj_set_width(sb, 80);
-        lv_obj_add_event_cb(sb, spinbox_changed_cb, LV_EVENT_VALUE_CHANGED,
-                            (void *)(intptr_t)i);
-        s_cells[i].spinbox = sb;
-
-        /* + button */
-        lv_obj_t *btn_inc = lv_btn_create(row_cont);
-        lv_obj_set_size(btn_inc, 34, 34);
-        lv_obj_add_event_cb(btn_inc, spinbox_inc_cb, LV_EVENT_ALL,
-                            (void *)(intptr_t)i);
-        lv_obj_t *lbl_inc = lv_label_create(btn_inc);
-        lv_label_set_text(lbl_inc, LV_SYMBOL_PLUS);
-        lv_obj_center(lbl_inc);
+        for (int r = 0; r < 3; r++) {
+            lv_obj_t *rb = lv_checkbox_create(radio_row);
+            lv_checkbox_set_text(rb, radio_labels[r]);
+            /* Style indicator as a radio button (circular) */
+            lv_obj_set_style_radius(rb, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+            lv_obj_set_style_bg_color(rb, lv_color_make(50, 50, 70),
+                                      LV_PART_INDICATOR);
+            lv_obj_set_style_bg_color(rb, lv_color_make(100, 200, 100),
+                                      LV_PART_INDICATOR | LV_STATE_CHECKED);
+            lv_obj_set_style_border_color(rb, lv_color_make(120, 120, 150),
+                                          LV_PART_INDICATOR);
+            lv_obj_set_style_border_width(rb, 1, LV_PART_INDICATOR);
+            lv_obj_set_style_text_color(rb, lv_color_make(200, 200, 200), 0);
+            /* Rate 0 is selected by default */
+            if (r == 0) {
+                lv_obj_add_state(rb, LV_STATE_CHECKED);
+            }
+            uint32_t ud = ((uint32_t)i << 16) | (uint32_t)r;
+            lv_obj_add_event_cb(rb, radio_cb, LV_EVENT_VALUE_CHANGED,
+                                (void *)(uintptr_t)ud);
+            s_cells[i].radio[r] = rb;
+        }
     }
+
+    /* ── Decay timer: fires every 1 second ────────────────────────── */
+    s_decay_timer = lv_timer_create(decay_cb, 1000, NULL);
 }
