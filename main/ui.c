@@ -1,9 +1,11 @@
 /*
- * ui.c – 3×3 grid of colour bars with individual brightness inputs
+ * ui.c – 3×3 grid of fill-bar sliders with individual brightness inputs
  *
- * Nine colour-bar cells are evenly spread in a 3×3 grid.  Each cell shows:
- *   • A coloured rectangle whose colour reflects the current brightness value.
+ * Nine cells are evenly spread in a 3×3 grid.  Each cell shows:
+ *   • A vertical fill-bar slider whose indicator colour reflects the value.
+ *     The slider is draggable – slide up/down to change the brightness.
  *   • A spinbox row (−  value  +) for entering a brightness in 0–40.
+ *     Both controls stay in sync with each other.
  *
  * Colour mapping (smooth gradient):
  *    0–20  : solid green
@@ -26,7 +28,7 @@
 
 /* ── per-cell state ─────────────────────────────────────────────────── */
 typedef struct {
-    lv_obj_t *rect;     /* coloured rectangle */
+    lv_obj_t *slider;   /* vertical fill-bar slider */
     lv_obj_t *spinbox;
     int32_t   value;
 } bar_cell_t;
@@ -92,8 +94,10 @@ static void flash_cb(lv_timer_t *t)
 /* ── update a single cell after its value changes ───────────────────── */
 static void update_cell(int idx)
 {
-    lv_obj_set_style_bg_color(s_cells[idx].rect,
-                              value_to_color(s_cells[idx].value), 0);
+    /* Update slider indicator colour to reflect new value */
+    lv_obj_set_style_bg_color(s_cells[idx].slider,
+                              value_to_color(s_cells[idx].value),
+                              LV_PART_INDICATOR);
 
     bool any_at_max = false;
     for (int i = 0; i < BAR_COUNT; i++) {
@@ -112,10 +116,26 @@ static void update_cell(int idx)
 }
 
 /* ── event callbacks ─────────────────────────────────────────────────── */
+
+/* Called when the slider is dragged or programmatically changed */
+static void slider_changed_cb(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    int32_t new_val = lv_slider_get_value(s_cells[idx].slider);
+    if (new_val == s_cells[idx].value) return;   /* already in sync */
+    s_cells[idx].value = new_val;
+    lv_spinbox_set_value(s_cells[idx].spinbox, new_val);
+    update_cell(idx);
+}
+
+/* Called when spinbox text value changes (after any increment / decrement) */
 static void spinbox_changed_cb(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    s_cells[idx].value = lv_spinbox_get_value(s_cells[idx].spinbox);
+    int32_t new_val = lv_spinbox_get_value(s_cells[idx].spinbox);
+    if (new_val == s_cells[idx].value) return;   /* already in sync */
+    s_cells[idx].value = new_val;
+    lv_slider_set_value(s_cells[idx].slider, new_val, LV_ANIM_OFF);
     update_cell(idx);
 }
 
@@ -125,8 +145,7 @@ static void spinbox_inc_cb(lv_event_t *e)
     if (code == LV_EVENT_SHORT_CLICKED || code == LV_EVENT_LONG_PRESSED_REPEAT) {
         int idx = (int)(intptr_t)lv_event_get_user_data(e);
         lv_spinbox_increment(s_cells[idx].spinbox);
-        s_cells[idx].value = lv_spinbox_get_value(s_cells[idx].spinbox);
-        update_cell(idx);
+        /* spinbox_changed_cb fires via LV_EVENT_VALUE_CHANGED and syncs everything */
     }
 }
 
@@ -136,8 +155,7 @@ static void spinbox_dec_cb(lv_event_t *e)
     if (code == LV_EVENT_SHORT_CLICKED || code == LV_EVENT_LONG_PRESSED_REPEAT) {
         int idx = (int)(intptr_t)lv_event_get_user_data(e);
         lv_spinbox_decrement(s_cells[idx].spinbox);
-        s_cells[idx].value = lv_spinbox_get_value(s_cells[idx].spinbox);
-        update_cell(idx);
+        /* spinbox_changed_cb fires via LV_EVENT_VALUE_CHANGED and syncs everything */
     }
 }
 
@@ -194,15 +212,28 @@ void app_ui_init(void)
                               LV_FLEX_ALIGN_CENTER,
                               LV_FLEX_ALIGN_CENTER);
 
-        /* ── Colour bar rectangle ─────────────────────────────────── */
-        lv_obj_t *bar = lv_obj_create(cell);
-        lv_obj_set_width(bar, lv_pct(100));
-        lv_obj_set_flex_grow(bar, 1);
-        lv_obj_set_style_bg_color(bar, value_to_color(0), 0);
-        lv_obj_set_style_border_width(bar, 0, 0);
-        lv_obj_set_style_radius(bar, 3, 0);
-        lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-        s_cells[i].rect = bar;
+        /* ── Vertical fill-bar slider ────────────────────────────────── */
+        lv_obj_t *slider = lv_slider_create(cell);
+        /* Narrow width forces LVGL to render it as a vertical slider */
+        lv_obj_set_width(slider, 50);
+        lv_obj_set_flex_grow(slider, 1);
+        lv_slider_set_range(slider, 0, VALUE_MAX);
+        lv_slider_set_value(slider, 0, LV_ANIM_OFF);
+        /* Track (empty portion) */
+        lv_obj_set_style_bg_color(slider, lv_color_make(50, 50, 70), LV_PART_MAIN);
+        lv_obj_set_style_radius(slider, 4, LV_PART_MAIN);
+        lv_obj_set_style_border_color(slider, lv_color_make(80, 80, 110), LV_PART_MAIN);
+        lv_obj_set_style_border_width(slider, 1, LV_PART_MAIN);
+        /* Indicator (fill portion) */
+        lv_obj_set_style_bg_color(slider, value_to_color(0), LV_PART_INDICATOR);
+        lv_obj_set_style_radius(slider, 4, LV_PART_INDICATOR);
+        /* Knob */
+        lv_obj_set_style_bg_color(slider, lv_color_make(200, 200, 220), LV_PART_KNOB);
+        lv_obj_set_style_radius(slider, 4, LV_PART_KNOB);
+        lv_obj_set_style_pad_all(slider, 6, LV_PART_KNOB);
+        lv_obj_add_event_cb(slider, slider_changed_cb, LV_EVENT_VALUE_CHANGED,
+                            (void *)(intptr_t)i);
+        s_cells[i].slider = slider;
 
         /* ── Spinbox row  [−] [value] [+] ────────────────────────── */
         lv_obj_t *row_cont = lv_obj_create(cell);
