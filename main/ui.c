@@ -41,8 +41,8 @@
 #define GRID_ROWS  3
 #define VALUE_MAX  40
 
-/* Left-strip width for row level labels */
-#define LEFT_STRIP_W       40
+/* Left-strip width for row level labels - wide enough to fit "Level" horizontally */
+#define LEFT_STRIP_W       60
 
 /* Slider bar dimensions */
 #define SLIDER_H            60    /* bar height in pixels                        */
@@ -70,16 +70,14 @@ static const char *s_zone_names[BAR_COUNT] = {
 };
 
 /*
- * Vertical text for the left strip.
- * Each character is placed on its own line so the label fits in the narrow
- * width without requiring LVGL transform rotation (which does not affect the
- * layout bounding box and would be clipped by the parent container).
+ * Left-strip level labels.  Each ordinal ("3rd", "2nd", "1st") fits on one
+ * horizontal line, with "Level" on the line below, stacked vertically.
  * Row order top → bottom: 3rd Level, 2nd Level, 1st Level.
  */
 static const char *s_level_vtext[GRID_ROWS] = {
-    "3\nr\nd\n \nL\ne\nv\ne\nl",   /* 3rd Level */
-    "2\nn\nd\n \nL\ne\nv\ne\nl",   /* 2nd Level */
-    "1\ns\nt\n \nL\ne\nv\ne\nl",   /* 1st Level */
+    "3rd\nLevel",   /* 3rd Level */
+    "2nd\nLevel",   /* 2nd Level */
+    "1st\nLevel",   /* 1st Level */
 };
 
 /* ── per-cell state ─────────────────────────────────────────────────── */
@@ -100,13 +98,10 @@ static bool        s_flash_state   = false;
 static lv_timer_t *s_decay_timer   = NULL;
 static uint32_t    s_decay_tick    = 0;
 static lv_timer_t *s_shimmer_timer = NULL;
+static lv_color_t  s_row_bg_colors[GRID_ROWS]; /* row background colors */
+static lv_obj_t   *s_bg_bands[GRID_ROWS];      /* full-width background bands */
 
 /* ── colour helpers ─────────────────────────────────────────────────── */
-static lv_color_t bg_blue(void)
-{
-    return lv_color_make(100, 149, 237);   /* cornflower blue */
-}
-
 static lv_color_t value_to_color(int32_t v)
 {
     uint8_t r = 0, g = 0, b = 0;
@@ -143,7 +138,8 @@ static void flash_cb(lv_timer_t *t)
         if (s_cells[i].value >= VALUE_MAX) { any_at_max = true; break; }
     }
     if (!any_at_max) {
-        lv_obj_set_style_bg_color(lv_scr_act(), bg_blue(), 0);
+        for (int r = 0; r < GRID_ROWS; r++)
+            lv_obj_set_style_bg_color(s_bg_bands[r], s_row_bg_colors[r], 0);
         lv_timer_del(s_flash_timer);
         s_flash_timer = NULL;
         s_flash_state = false;
@@ -151,8 +147,11 @@ static void flash_cb(lv_timer_t *t)
     }
 
     s_flash_state = !s_flash_state;
-    lv_color_t c = s_flash_state ? lv_color_make(220, 0, 0) : bg_blue();
-    lv_obj_set_style_bg_color(lv_scr_act(), c, 0);
+    lv_color_t flash_red = lv_color_make(220, 0, 0);
+    for (int r = 0; r < GRID_ROWS; r++) {
+        lv_color_t c = s_flash_state ? flash_red : s_row_bg_colors[r];
+        lv_obj_set_style_bg_color(s_bg_bands[r], c, 0);
+    }
 }
 
 /* ── update a single cell after its value changes ───────────────────── */
@@ -175,7 +174,8 @@ static void update_cell(int idx)
         lv_timer_del(s_flash_timer);
         s_flash_timer = NULL;
         s_flash_state = false;
-        lv_obj_set_style_bg_color(lv_scr_act(), bg_blue(), 0);
+        for (int r = 0; r < GRID_ROWS; r++)
+            lv_obj_set_style_bg_color(s_bg_bands[r], s_row_bg_colors[r], 0);
     }
 }
 
@@ -330,18 +330,40 @@ void app_ui_init(void)
     lv_obj_set_style_pad_all(scr, 0, 0);
     lv_obj_set_style_border_width(scr, 0, 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_bg_color(scr, bg_blue(), 0);
+    lv_obj_set_style_bg_color(scr, lv_color_make(20, 45, 100), 0);
 
-    /* Row background colours – three distinct blue shades, one per level */
-    lv_color_t row_bg_colors[GRID_ROWS];
-    row_bg_colors[0] = lv_color_make(20,  45, 100);   /* 3rd Level – deep navy   */
-    row_bg_colors[1] = lv_color_make(20,  75, 135);   /* 2nd Level – mid blue    */
-    row_bg_colors[2] = lv_color_make(18, 110, 165);   /* 1st Level – steel blue  */
+    /* Row background colours:
+     * 1st and 3rd Level share the same dark navy; 2nd Level is a lighter blue.
+     * Stored globally so the flash timer can restore them after a red flash.
+     * Row order (top → bottom): row 0 = 3rd Level, row 1 = 2nd Level, row 2 = 1st Level. */
+    s_row_bg_colors[0] = lv_color_make(20,  45, 100);   /* 3rd Level – dark navy (same as 1st) */
+    s_row_bg_colors[1] = lv_color_make(50, 120, 190);   /* 2nd Level – lighter steel blue      */
+    s_row_bg_colors[2] = lv_color_make(20,  45, 100);   /* 1st Level – dark navy (same as 3rd) */
 
     lv_color_t row_border_colors[GRID_ROWS];
     row_border_colors[0] = lv_color_make(50,  75, 135);
-    row_border_colors[1] = lv_color_make(45, 105, 165);
-    row_border_colors[2] = lv_color_make(40, 140, 195);
+    row_border_colors[1] = lv_color_make(80, 155, 215);
+    row_border_colors[2] = lv_color_make(50,  75, 135);
+
+    /* ── Full-width background bands (created before left_strip/grid so they sit behind) ── */
+    lv_coord_t band_h = LVGL_PORT_V_RES / GRID_ROWS;
+    for (int r = 0; r < GRID_ROWS; r++) {
+        /* Last band gets any remaining pixels to avoid a gap at the bottom */
+        lv_coord_t this_h = (r == GRID_ROWS - 1)
+                            ? (LVGL_PORT_V_RES - r * band_h)
+                            : band_h;
+        lv_obj_t *band = lv_obj_create(scr);
+        lv_obj_add_flag(band, LV_OBJ_FLAG_IGNORE_LAYOUT);
+        lv_obj_clear_flag(band, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_pos(band, 0, r * band_h);
+        lv_obj_set_size(band, LVGL_PORT_H_RES, this_h);
+        lv_obj_set_style_bg_color(band, s_row_bg_colors[r], 0);
+        lv_obj_set_style_bg_opa(band, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(band, 0, 0);
+        lv_obj_set_style_radius(band, 0, 0);
+        lv_obj_set_style_pad_all(band, 0, 0);
+        s_bg_bands[r] = band;
+    }
 
     /* ── Left strip: LEFT_STRIP_W px wide, full height, one coloured band per level ── */
     lv_obj_t *left_strip = lv_obj_create(scr);
@@ -360,8 +382,7 @@ void app_ui_init(void)
         lv_obj_clear_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_pos(seg, 0, row_idx * seg_h);
         lv_obj_set_size(seg, LEFT_STRIP_W, seg_h);
-        lv_obj_set_style_bg_color(seg, row_bg_colors[row_idx], 0);
-        lv_obj_set_style_bg_opa(seg, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_opa(seg, LV_OPA_TRANSP, 0);   /* background band shows through */
         lv_obj_set_style_border_width(seg, 0, 0);
         lv_obj_set_style_pad_all(seg, 0, 0);
         lv_obj_set_style_radius(seg, 0, 0);
@@ -370,6 +391,7 @@ void app_ui_init(void)
         lv_label_set_text(lvl_lbl, s_level_vtext[row_idx]);
         lv_obj_set_style_text_color(lvl_lbl, lv_color_white(), 0);
         lv_obj_set_style_text_align(lvl_lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(lvl_lbl, LEFT_STRIP_W);
         lv_obj_center(lvl_lbl);
     }
 
@@ -408,7 +430,7 @@ void app_ui_init(void)
                              LV_GRID_ALIGN_STRETCH, col, 1,
                              LV_GRID_ALIGN_STRETCH, row, 1);
         lv_obj_set_style_pad_all(cell, 4, 0);
-        lv_obj_set_style_bg_color(cell, row_bg_colors[row], 0);
+        lv_obj_set_style_bg_opa(cell, LV_OPA_TRANSP, 0);   /* background band shows through */
         lv_obj_set_style_border_color(cell, row_border_colors[row], 0);
         lv_obj_set_style_border_width(cell, 1, 0);
         lv_obj_set_style_radius(cell, 4, 0);
@@ -444,16 +466,12 @@ void app_ui_init(void)
         /* Knob – made invisible so only the fill bar is visible */
         lv_obj_set_style_opa(slider, LV_OPA_TRANSP, LV_PART_KNOB);
         lv_obj_set_style_pad_all(slider, 0, LV_PART_KNOB);
-        /* Mirror fill direction for middle row (indices 3–5) */
-        if (row == 1) {
-            lv_obj_set_style_base_dir(slider, LV_BASE_DIR_RTL, 0);
-        }
         lv_obj_add_event_cb(slider, slider_changed_cb, LV_EVENT_VALUE_CHANGED,
                             (void *)(intptr_t)i);
         s_cells[i].slider = slider;
 
-        /* Shimmer stripe – "charging battery" wave sweeping in fill direction */
-        add_shimmer(slider, i, row == 1);
+        /* Shimmer stripe – "charging battery" wave sweeping left-to-right */
+        add_shimmer(slider, i, false);
 
         /* ── Radio-button row (decay rate 0 / 1 / 2) ─────────────── */
         lv_obj_t *radio_row = lv_obj_create(cell);
