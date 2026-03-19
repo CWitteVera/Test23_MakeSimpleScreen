@@ -7,10 +7,13 @@
  *
  * Creates nine cells spread evenly across the 800×480 display.
  * Each cell contains:
- *   - A vertical fill-bar slider whose indicator colour reflects the current
- *     brightness value.  The slider is touch-draggable.
- *   - A spinbox row (−  value  +) for entering a brightness in 0–40.
- *     Both controls are kept in sync.
+ *   - A horizontal fill-bar slider (twice the height of the previous version)
+ *     whose indicator colour reflects the current value.  Touch-draggable.
+ *   - Three radio buttons labeled 0 / 1 / 2 that control how quickly the
+ *     bar automatically returns to zero:
+ *       0 – no automatic decrease
+ *       1 – decrease by 1 unit every 2 seconds
+ *       2 – decrease by 1 unit every second
  *
  * Colour mapping: 0–20 green · 21–25 green→yellow · 26–30 yellow ·
  *                 31–35 yellow→red · 36–40 red.
