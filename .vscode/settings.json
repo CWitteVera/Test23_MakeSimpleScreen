@@ -7,5 +7,7 @@
   "files.associations": {
     "sdkconfig.defaults": "plaintext"
   },
-  "idf.currentSetup": "C:\\Users\\cwitte\\esp\\v5.5.2\\esp-idf"
+  "idf.currentSetup": "C:\\Users\\cwitte\\esp\\v5.5.2\\esp-idf",
+  "idf.flashType": "UART",
+  "idf.portWin": "COM4"
 }

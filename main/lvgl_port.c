@@ -431,20 +431,19 @@ static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
     esp_lcd_touch_handle_t tp = (esp_lcd_touch_handle_t)indev_drv->user_data; // Get touchpad handle from user data
     assert(tp); // Ensure touchpad handle is valid
 
-    uint16_t touchpad_x; // Variable for X coordinate
-    uint16_t touchpad_y; // Variable for Y coordinate
+    esp_lcd_touch_point_data_t point; // First touch point data
     uint8_t touchpad_cnt = 0; // Variable for touch count
 
     /* Read data from touch controller into memory */
     esp_lcd_touch_read_data(tp); // Read data from touch controller
 
     /* Read data from touch controller */
-    bool touchpad_pressed = esp_lcd_touch_get_coordinates(tp, &touchpad_x, &touchpad_y, NULL, &touchpad_cnt, 1); // Get touch coordinates
-    if (touchpad_pressed && touchpad_cnt > 0) {
-        data->point.x = touchpad_x; // Set the X coordinate
-        data->point.y = touchpad_y; // Set the Y coordinate
+    esp_err_t touch_ret = esp_lcd_touch_get_data(tp, &point, &touchpad_cnt, 1); // Get touch coordinates
+    if ((touch_ret == ESP_OK) && (touchpad_cnt > 0)) {
+        data->point.x = point.x; // Set the X coordinate
+        data->point.y = point.y; // Set the Y coordinate
         data->state = LV_INDEV_STATE_PRESSED; // Set state to pressed
-        ESP_LOGD(TAG, "Touch position: %d,%d", touchpad_x, touchpad_y); // Log touch position
+        ESP_LOGD(TAG, "Touch position: %d,%d", point.x, point.y); // Log touch position
     } else {
         data->state = LV_INDEV_STATE_RELEASED; // Set state to released
     }
