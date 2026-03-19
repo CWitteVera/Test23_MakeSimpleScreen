@@ -7,10 +7,11 @@
  *
  * Creates nine cells spread evenly across the 800×480 display.
  * Each cell contains:
- *   - A horizontal fill-bar slider (twice the height of the previous version)
- *     whose indicator colour reflects the current value.  Touch-draggable.
- *   - Three radio buttons labeled 0 / 1 / 2 that control how quickly the
- *     bar automatically returns to zero:
+ *   - A horizontal fill-bar slider whose indicator colour reflects the current
+ *     value.  Touch-draggable.  A shimmer stripe sweeps continuously across
+ *     the bar in the fill direction, giving a "charging battery" wave effect.
+ *   - Three square buttons (80×80 px, labeled 0 / 1 / 2) that control how
+ *     quickly the bar automatically returns to zero:
  *       0 – no automatic decrease
  *       1 – decrease by 1 unit every 2 seconds
  *       2 – decrease by 1 unit every second
