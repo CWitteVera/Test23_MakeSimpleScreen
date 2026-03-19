@@ -2,11 +2,12 @@
  * ui.c – 3×3 grid of fill-bar sliders with individual decay-rate selectors
  *
  * Nine cells are evenly spread in a 3×3 grid.  Each cell shows:
- *   • A horizontal fill-bar slider (twice the previous height) whose indicator
- *     colour reflects the value.  The slider is draggable left/right.
- *     The knob is invisible so only the coloured fill bar is shown.
- *   • Three radio buttons labeled 0 / 1 / 2 that select how quickly the bar
- *     returns to zero automatically:
+ *   • A horizontal fill-bar slider whose indicator colour reflects the value.
+ *     The slider is draggable left/right.  The knob is invisible so only the
+ *     coloured fill bar is shown.  A shimmer stripe sweeps across the bar in
+ *     the fill direction, creating a "charging battery" wave effect.
+ *   • Three square buttons (80×80 px) labeled 0 / 1 / 2 that select how
+ *     quickly the bar returns to zero automatically:
  *       0 – no automatic decrease
  *       1 – decrease by 1 unit every 2 seconds
  *       2 – decrease by 1 unit every second
@@ -29,6 +30,23 @@
 #define BAR_COUNT  9
 #define GRID_COLS  3
 #define VALUE_MAX  40
+
+/* Slider bar dimensions */
+#define SLIDER_H            60    /* bar height in pixels                        */
+#define SLIDER_W_SWEEP     290    /* sweep end x-value (≥ actual slider width)   */
+
+/* Shimmer ("charging battery" wave) */
+#define SHIMMER_W          36    /* width of the sweeping stripe (pixels)       */
+#define SHIMMER_PERIOD   1400    /* ms for one complete sweep                   */
+#define SHIMMER_STAGGER   155    /* ms delay between successive bars (≈ SHIMMER_PERIOD/9) */
+
+/* Square selector button */
+#define SQBTN_SIZE         80    /* side length in pixels (2× the old 40 px)    */
+
+/* Shared label colour for selector buttons */
+#define SQBTN_LABEL_R     220
+#define SQBTN_LABEL_G     220
+#define SQBTN_LABEL_B     220
 
 /* ── per-cell state ─────────────────────────────────────────────────── */
 typedef struct {
@@ -178,6 +196,49 @@ static void decay_cb(lv_timer_t *t)
     }
 }
 
+/* ── shimmer / wave animation ────────────────────────────────────────── */
+
+/* Animation exec callback: sets the x position of the shimmer stripe */
+static void shimmer_exec_cb(void *obj, int32_t x)
+{
+    lv_obj_set_x((lv_obj_t *)obj, x);
+}
+
+/*
+ * Add a semi-transparent stripe that sweeps across the slider bar in the
+ * fill direction, giving a "charging battery" pulse effect.
+ * rtl=true  → stripe moves right-to-left  (middle row which fills RTL)
+ * rtl=false → stripe moves left-to-right
+ * idx is used to stagger the start delay so bars don't all pulse in sync.
+ */
+static void add_shimmer(lv_obj_t *slider, int idx, bool rtl)
+{
+    lv_obj_t *sh = lv_obj_create(slider);
+    lv_obj_add_flag(sh, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_clear_flag(sh, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_size(sh, SHIMMER_W, SLIDER_H);
+    lv_obj_set_y(sh, 0);
+    lv_obj_set_style_bg_color(sh, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(sh, LV_OPA_30, 0);
+    lv_obj_set_style_border_width(sh, 0, 0);
+    lv_obj_set_style_radius(sh, 0, 0);
+
+    /* Sweep from the leading edge to the trailing edge of the bar */
+    int32_t x_start = rtl ?  SLIDER_W_SWEEP : -(SHIMMER_W + 4);
+    int32_t x_end   = rtl ? -(SHIMMER_W + 4) :  SLIDER_W_SWEEP;
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, sh);
+    lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)shimmer_exec_cb);
+    lv_anim_set_values(&a, x_start, x_end);
+    lv_anim_set_time(&a, SHIMMER_PERIOD);
+    lv_anim_set_delay(&a, (uint32_t)idx * SHIMMER_STAGGER);   /* stagger across 9 bars */
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_linear);
+    lv_anim_start(&a);
+}
+
 /* ── public API ──────────────────────────────────────────────────────── */
 void app_ui_init(void)
 {
@@ -234,9 +295,9 @@ void app_ui_init(void)
                               LV_FLEX_ALIGN_CENTER,
                               LV_FLEX_ALIGN_CENTER);
 
-        /* ── Horizontal fill-bar slider (twice the previous height) ─── */
+        /* ── Horizontal fill-bar slider ────────────────────────────── */
         lv_obj_t *slider = lv_slider_create(cell);
-        lv_obj_set_size(slider, lv_pct(100), 90);
+        lv_obj_set_size(slider, lv_pct(100), SLIDER_H);
         lv_slider_set_range(slider, 0, VALUE_MAX);
         lv_slider_set_value(slider, 0, LV_ANIM_OFF);
         /* Track (empty portion) */
@@ -244,6 +305,7 @@ void app_ui_init(void)
         lv_obj_set_style_radius(slider, 4, LV_PART_MAIN);
         lv_obj_set_style_border_color(slider, lv_color_make(80, 80, 110), LV_PART_MAIN);
         lv_obj_set_style_border_width(slider, 1, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(slider, 0, LV_PART_MAIN);
         /* Indicator (fill portion) */
         lv_obj_set_style_bg_color(slider, value_to_color(0), LV_PART_INDICATOR);
         lv_obj_set_style_radius(slider, 4, LV_PART_INDICATOR);
@@ -258,13 +320,16 @@ void app_ui_init(void)
                             (void *)(intptr_t)i);
         s_cells[i].slider = slider;
 
+        /* Shimmer stripe – "charging battery" wave sweeping in fill direction */
+        add_shimmer(slider, i, row == 1);
+
         /* ── Radio-button row (decay rate 0 / 1 / 2) ─────────────── */
         lv_obj_t *radio_row = lv_obj_create(cell);
         lv_obj_set_size(radio_row, lv_pct(100), LV_SIZE_CONTENT);
         lv_obj_set_style_bg_opa(radio_row, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(radio_row, 0, 0);
         lv_obj_set_style_pad_all(radio_row, 2, 0);
-        lv_obj_set_style_pad_column(radio_row, 6, 0);
+        lv_obj_set_style_pad_column(radio_row, 2, 0);
         lv_obj_clear_flag(radio_row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_layout(radio_row, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(radio_row, LV_FLEX_FLOW_ROW);
@@ -274,20 +339,26 @@ void app_ui_init(void)
                               LV_FLEX_ALIGN_CENTER);
 
         for (int r = 0; r < 3; r++) {
-            lv_obj_t *rb = lv_checkbox_create(radio_row);
-            lv_checkbox_set_text(rb, radio_labels[r]);
-            /* Style indicator as a radio button (circular) */
-            lv_obj_set_style_radius(rb, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
-            lv_obj_set_style_width(rb, 40, LV_PART_INDICATOR);
-            lv_obj_set_style_height(rb, 40, LV_PART_INDICATOR);
+            /* Square button (SQBTN_SIZE × SQBTN_SIZE) with label centered inside */
+            lv_obj_t *rb = lv_obj_create(radio_row);
+            lv_obj_set_size(rb, SQBTN_SIZE, SQBTN_SIZE);
+            lv_obj_set_style_radius(rb, 0, LV_PART_MAIN);
             lv_obj_set_style_bg_color(rb, lv_color_make(50, 50, 70),
-                                      LV_PART_INDICATOR);
+                                      LV_PART_MAIN);
             lv_obj_set_style_bg_color(rb, lv_color_make(100, 200, 100),
-                                      LV_PART_INDICATOR | LV_STATE_CHECKED);
+                                      LV_PART_MAIN | LV_STATE_CHECKED);
             lv_obj_set_style_border_color(rb, lv_color_make(120, 120, 150),
-                                          LV_PART_INDICATOR);
-            lv_obj_set_style_border_width(rb, 1, LV_PART_INDICATOR);
-            lv_obj_set_style_text_color(rb, lv_color_make(200, 200, 200), 0);
+                                          LV_PART_MAIN);
+            lv_obj_set_style_border_width(rb, 2, LV_PART_MAIN);
+            lv_obj_add_flag(rb, LV_OBJ_FLAG_CHECKABLE);
+            lv_obj_clear_flag(rb, LV_OBJ_FLAG_SCROLLABLE);
+
+            lv_obj_t *lbl = lv_label_create(rb);
+            lv_label_set_text(lbl, radio_labels[r]);
+            lv_obj_set_style_text_color(lbl,
+                lv_color_make(SQBTN_LABEL_R, SQBTN_LABEL_G, SQBTN_LABEL_B), 0);
+            lv_obj_center(lbl);
+
             /* Rate 0 is selected by default */
             if (r == 0) {
                 lv_obj_add_state(rb, LV_STATE_CHECKED);
