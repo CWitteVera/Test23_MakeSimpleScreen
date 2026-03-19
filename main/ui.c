@@ -2,8 +2,9 @@
  * ui.c – 3×3 grid of fill-bar sliders with individual brightness inputs
  *
  * Nine cells are evenly spread in a 3×3 grid.  Each cell shows:
- *   • A vertical fill-bar slider whose indicator colour reflects the value.
- *     The slider is draggable – slide up/down to change the brightness.
+ *   • A horizontal fill-bar slider whose indicator colour reflects the value.
+ *     The slider is draggable – slide left/right to change the brightness.
+ *     The knob is invisible so only the coloured fill bar is shown.
  *   • A spinbox row (−  value  +) for entering a brightness in 0–40.
  *     Both controls stay in sync with each other.
  *
@@ -28,7 +29,7 @@
 
 /* ── per-cell state ─────────────────────────────────────────────────── */
 typedef struct {
-    lv_obj_t *slider;   /* vertical fill-bar slider */
+    lv_obj_t *slider;   /* horizontal fill-bar slider */
     lv_obj_t *spinbox;
     int32_t   value;
 } bar_cell_t;
@@ -212,11 +213,10 @@ void app_ui_init(void)
                               LV_FLEX_ALIGN_CENTER,
                               LV_FLEX_ALIGN_CENTER);
 
-        /* ── Vertical fill-bar slider ────────────────────────────────── */
+        /* ── Horizontal fill-bar slider ─────────────────────────────── */
         lv_obj_t *slider = lv_slider_create(cell);
-        /* Narrow width forces LVGL to render it as a vertical slider */
-        lv_obj_set_width(slider, 50);
-        lv_obj_set_flex_grow(slider, 1);
+        /* Full width, fixed height renders as a horizontal slider */
+        lv_obj_set_size(slider, lv_pct(100), 30);
         lv_slider_set_range(slider, 0, VALUE_MAX);
         lv_slider_set_value(slider, 0, LV_ANIM_OFF);
         /* Track (empty portion) */
@@ -227,10 +227,9 @@ void app_ui_init(void)
         /* Indicator (fill portion) */
         lv_obj_set_style_bg_color(slider, value_to_color(0), LV_PART_INDICATOR);
         lv_obj_set_style_radius(slider, 4, LV_PART_INDICATOR);
-        /* Knob */
-        lv_obj_set_style_bg_color(slider, lv_color_make(200, 200, 220), LV_PART_KNOB);
-        lv_obj_set_style_radius(slider, 4, LV_PART_KNOB);
-        lv_obj_set_style_pad_all(slider, 6, LV_PART_KNOB);
+        /* Knob – made invisible so only the fill bar is visible */
+        lv_obj_set_style_opa(slider, LV_OPA_TRANSP, LV_PART_KNOB);
+        lv_obj_set_style_pad_all(slider, 0, LV_PART_KNOB);
         lv_obj_add_event_cb(slider, slider_changed_cb, LV_EVENT_VALUE_CHANGED,
                             (void *)(intptr_t)i);
         s_cells[i].slider = slider;
