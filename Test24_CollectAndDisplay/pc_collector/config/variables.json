@@ -1,0 +1,126 @@
+{
+    "_comment": [
+        "Variables to poll from the PLC.",
+        "Each entry defines one digital sensor on the conveyor system.",
+        "",
+        "Fields:",
+        "  name        - Friendly identifier used throughout the collector (must be unique).",
+        "  plc_tag     - PLC address / tag name to read (update to match your PLC's addressing).",
+        "  description - Human-readable description of what this sensor monitors.",
+        "  invert      - Set to true if the sensor is normally-closed (active LOW) and you",
+        "                want the collector to treat a LOW signal as 'box present'.",
+        "  signal_type - How this sensor affects zone box counts:",
+        "                  'origin'     : First arrival sensor. Increments the listed zone.",
+        "                  'transition' : Box moves from zone_from → zone_to.",
+        "                                 Increments zone_to, decrements zone_from.",
+        "                  'exit'       : Box leaves the system. Decrements zone_from.",
+        "  zone_from   - Zone whose count decreases when this sensor fires (transition/exit).",
+        "  zone_to     - Zone whose count increases when this sensor fires (origin/transition).",
+        "",
+        "Zone naming convention: L<level>Z<zone>  e.g. L1Z1 = Level 1 Zone 1.",
+        "Valid zones: L1Z1 L1Z2 L1Z3 L2Z1 L2Z2 L2Z3 L3Z1 L3Z2 L3Z3",
+        "",
+        "To add a new sensor, append another entry to the 'sensors' array."
+    ],
+    "sensors": [
+        {
+            "name":        "origin_entry",
+            "plc_tag":     "DB1.DBX0.0",
+            "description": "Box arrives at the start of the conveyor (enters L1Z1)",
+            "invert":      false,
+            "signal_type": "origin",
+            "zone_from":   null,
+            "zone_to":     "L1Z1"
+        },
+        {
+            "name":        "L1Z1_to_L1Z2",
+            "plc_tag":     "DB1.DBX0.1",
+            "description": "Box transfers from Level 1 Zone 1 into Level 1 Zone 2",
+            "invert":      false,
+            "signal_type": "transition",
+            "zone_from":   "L1Z1",
+            "zone_to":     "L1Z2"
+        },
+        {
+            "name":        "L1Z2_to_L1Z3",
+            "plc_tag":     "DB1.DBX0.2",
+            "description": "Box transfers from Level 1 Zone 2 into Level 1 Zone 3",
+            "invert":      false,
+            "signal_type": "transition",
+            "zone_from":   "L1Z2",
+            "zone_to":     "L1Z3"
+        },
+        {
+            "name":        "L1Z3_to_L2Z1",
+            "plc_tag":     "DB1.DBX0.3",
+            "description": "Box transfers from Level 1 Zone 3 into Level 2 Zone 1",
+            "invert":      false,
+            "signal_type": "transition",
+            "zone_from":   "L1Z3",
+            "zone_to":     "L2Z1"
+        },
+        {
+            "name":        "L2Z1_to_L2Z2",
+            "plc_tag":     "DB1.DBX0.4",
+            "description": "Box transfers from Level 2 Zone 1 into Level 2 Zone 2",
+            "invert":      false,
+            "signal_type": "transition",
+            "zone_from":   "L2Z1",
+            "zone_to":     "L2Z2"
+        },
+        {
+            "name":        "L2Z2_to_L2Z3",
+            "plc_tag":     "DB1.DBX0.5",
+            "description": "Box transfers from Level 2 Zone 2 into Level 2 Zone 3",
+            "invert":      false,
+            "signal_type": "transition",
+            "zone_from":   "L2Z2",
+            "zone_to":     "L2Z3"
+        },
+        {
+            "name":        "L2_exit",
+            "plc_tag":     "DB1.DBX0.6",
+            "description": "Box exits the system at Level 2 (exit point 1)",
+            "invert":      false,
+            "signal_type": "exit",
+            "zone_from":   "L2Z3",
+            "zone_to":     null
+        },
+        {
+            "name":        "L2Z3_to_L3Z1",
+            "plc_tag":     "DB1.DBX0.7",
+            "description": "Box transfers from Level 2 Zone 3 into Level 3 Zone 1",
+            "invert":      false,
+            "signal_type": "transition",
+            "zone_from":   "L2Z3",
+            "zone_to":     "L3Z1"
+        },
+        {
+            "name":        "L3Z1_to_L3Z2",
+            "plc_tag":     "DB1.DBX1.0",
+            "description": "Box transfers from Level 3 Zone 1 into Level 3 Zone 2",
+            "invert":      false,
+            "signal_type": "transition",
+            "zone_from":   "L3Z1",
+            "zone_to":     "L3Z2"
+        },
+        {
+            "name":        "L3Z2_to_L3Z3",
+            "plc_tag":     "DB1.DBX1.1",
+            "description": "Box transfers from Level 3 Zone 2 into Level 3 Zone 3",
+            "invert":      false,
+            "signal_type": "transition",
+            "zone_from":   "L3Z2",
+            "zone_to":     "L3Z3"
+        },
+        {
+            "name":        "L3_exit",
+            "plc_tag":     "DB1.DBX1.2",
+            "description": "Box exits the system at Level 3 (exit point 2)",
+            "invert":      false,
+            "signal_type": "exit",
+            "zone_from":   "L3Z3",
+            "zone_to":     null
+        }
+    ]
+}

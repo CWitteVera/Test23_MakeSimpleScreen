@@ -1,0 +1,15 @@
+# Historian data files – keep directory, ignore generated CSVs
+pc_collector/historian/*.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# ESP-IDF build artifacts
+esp32_firmware/build/
+esp32_firmware/sdkconfig
+esp32_firmware/managed_components/
