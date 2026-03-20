@@ -1,0 +1,16 @@
+# Test24_CollectAndDisplay – PC Collector dependencies
+#
+# Core runtime – no third-party packages are required for the stub.
+# Uncomment / add the appropriate PLC library once your connection logic is ready.
+#
+# Siemens S7 (python-snap7):
+#   python-snap7>=1.3
+#
+# Allen-Bradley (pycomm3):
+#   pycomm3>=1.2
+#
+# Modbus TCP/RTU (pymodbus):
+#   pymodbus>=3.0
+#
+# MQTT (if sending zone counts to the ESP32 display via a broker):
+#   paho-mqtt>=2.0
