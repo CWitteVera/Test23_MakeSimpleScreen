@@ -1,5 +1,6 @@
 #include "waveshare_rgb_lcd_port.h"
 #include "ui.h"
+#include "mqtt_handler.h"
 
 void app_main(void)
 {
@@ -10,4 +11,6 @@ void app_main(void)
         app_ui_init();
         lvgl_port_unlock();
     }
+
+    mqtt_handler_start();
 }

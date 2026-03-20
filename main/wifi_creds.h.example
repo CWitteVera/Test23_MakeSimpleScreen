@@ -1,0 +1,14 @@
+/*
+ * wifi_creds.h.example
+ *
+ * Copy this file to wifi_creds.h and fill in your real credentials.
+ * wifi_creds.h is git-ignored and must NEVER be committed.
+ */
+#pragma once
+
+/* Wi-Fi station credentials */
+#define WIFI_SSID       "your_wifi_ssid"
+#define WIFI_PASSWORD   "your_wifi_password"
+
+/* MQTT broker URI – e.g. "mqtt://192.168.1.100" or "mqtt://broker.local" */
+#define MQTT_BROKER_URI "mqtt://192.168.1.100"

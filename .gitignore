@@ -4,6 +4,9 @@ sdkconfig
 sdkconfig.old
 managed_components/
 
+# Wi-Fi / MQTT credentials (never commit the real file)
+main/wifi_creds.h
+
 # VS Code
 .vscode/*.log
 
