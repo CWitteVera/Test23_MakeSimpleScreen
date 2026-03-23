@@ -531,12 +531,12 @@ void app_ui_init(void)
     lv_obj_align(rx_lbl, LV_ALIGN_RIGHT_MID, -4, 0);
     s_status_rx_lbl = rx_lbl;
 
-    /* MQTT connection indicator (immediately left of the RX label) */
+    /* MQTT connection indicator (centre of the status bar) */
     lv_obj_t *mqtt_lbl = lv_label_create(status_bar);
     lv_label_set_text(mqtt_lbl, "MQTT: --");
     lv_obj_set_style_text_color(mqtt_lbl, lv_color_make(130, 130, 130), 0);
     lv_obj_set_style_text_font(mqtt_lbl, &lv_font_montserrat_12, 0);
-    lv_obj_align_to(mqtt_lbl, rx_lbl, LV_ALIGN_OUT_LEFT_MID, -12, 0);
+    lv_obj_align(mqtt_lbl, LV_ALIGN_CENTER, 0, 0);
     s_status_mqtt_lbl = mqtt_lbl;
 
     /* ── Stale-check timer: fires every 1 second ───────────────────── */
