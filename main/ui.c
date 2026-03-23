@@ -1,24 +1,22 @@
 /*
- * ui.c – 3×3 grid of fill-bar sliders with individual decay-rate selectors
+ * ui.c – 3×3 grid of fill-bar sliders driven by MQTT zone counts
  *
  * Nine cells are evenly spread in a 3×3 grid.  Each cell shows:
  *   • A zone label at the top of the cell.
  *   • A horizontal fill-bar slider whose indicator colour reflects the value.
- *     The slider is draggable left/right.  The knob is invisible so only the
- *     coloured fill bar is shown.  A shimmer stripe sweeps across the bar in
- *     the fill direction, creating a "charging battery" wave effect.
- *   • Three rectangular buttons (80×50 px) labeled 0 / 1 / 2 that select how
- *     quickly the bar returns to zero automatically:
- *       0 – no automatic decrease
- *       1 – decrease by 1 unit every 2 seconds
- *       2 – decrease by 1 unit every second
+ *     A shimmer stripe sweeps across the bar in the fill direction, giving a
+ *     "charging battery" wave effect.
+ *   • A numeric count label showing the last received MQTT count for that zone.
+ *     Shows "---" (grey) if no update has been received for ≥10 seconds.
  *
  * Zone labels per row:
- *   Top row    (left → right): Zone 1, Zone 2, Zone 3
- *   Middle row (left → right): Zone 3, Zone 2, Zone 1
- *   Bottom row (left → right): Zone 1, Zone 2, Zone 3
+ *   Top row    (left → right): Zone 1, Zone 2, Zone 3  (3rd Level)
+ *   Middle row (left → right): Zone 3, Zone 2, Zone 1  (2nd Level)
+ *   Bottom row (left → right): Zone 1, Zone 2, Zone 3  (1st Level)
  *
  * A left strip shows vertical row labels: 3rd Level / 2nd Level / 1st Level.
+ *
+ * MQTT updates arrive via ui_update_zone_count(level, zone, count).
  *
  * Colour mapping (smooth gradient):
  *    0–20  : solid green
@@ -34,12 +32,16 @@
 #include "ui.h"
 #include "lvgl.h"
 #include "lvgl_port.h"
+#include "esp_timer.h"
 
 /* ── constants ──────────────────────────────────────────────────────── */
 #define BAR_COUNT  9
 #define GRID_COLS  3
 #define GRID_ROWS  3
 #define VALUE_MAX  40
+
+/* Staleness threshold: 10 seconds in microseconds */
+#define STALE_THRESHOLD_US  (10LL * 1000000LL)
 
 /* Left-strip width for row level labels - wide enough to fit "Level" horizontally */
 #define LEFT_STRIP_W       60
@@ -53,14 +55,8 @@
 #define SHIMMER_TICK_MS    40    /* timer interval in ms (~25 fps)              */
 #define SHIMMER_PX_PER_TICK  5  /* pixels advanced per tick (~125 px/s)        */
 
-/* Rectangular selector button */
-#define SQBTN_W            80    /* button width  in pixels                     */
-#define SQBTN_H            50    /* button height in pixels (reduced for label) */
-
-/* Shared label colour for selector buttons */
-#define SQBTN_LABEL_R     220
-#define SQBTN_LABEL_G     220
-#define SQBTN_LABEL_B     220
+/* Maximum wait for the LVGL mutex when called from an external task */
+#define LVGL_LOCK_TIMEOUT_MS  10
 
 /* Zone name per cell index (row-major order, 0–8) */
 static const char *s_zone_names[BAR_COUNT] = {
@@ -83,20 +79,21 @@ static const char *s_level_vtext[GRID_ROWS] = {
 /* ── per-cell state ─────────────────────────────────────────────────── */
 typedef struct {
     lv_obj_t *slider;        /* horizontal fill-bar slider */
-    lv_obj_t *radio[3];      /* radio buttons for decay rates 0, 1, 2 */
+    lv_obj_t *count_lbl;     /* numeric count label below the slider */
     int32_t   value;
-    int       decay_rate;    /* 0 = none, 1 = −1/2 s, 2 = −1/s */
     lv_obj_t *shimmer_clip;  /* clipping container over the fill region */
     lv_obj_t *shimmer_stripe;/* the sweeping stripe inside the clip */
     int32_t   shimmer_x;     /* current stripe x in clip-relative pixels */
     bool      shimmer_rtl;   /* true for RTL (middle row) bars */
+    int64_t   last_update_us;/* esp_timer_get_time() at last MQTT update, 0 = never */
+    bool      data_received; /* true once at least one MQTT update has arrived */
+    bool      stale;         /* true when no update for ≥ STALE_THRESHOLD_US */
 } bar_cell_t;
 
 static bar_cell_t  s_cells[BAR_COUNT];
 static lv_timer_t *s_flash_timer   = NULL;
 static bool        s_flash_state   = false;
-static lv_timer_t *s_decay_timer   = NULL;
-static uint32_t    s_decay_tick    = 0;
+static lv_timer_t *s_stale_timer   = NULL;
 static lv_timer_t *s_shimmer_timer = NULL;
 static lv_color_t  s_row_bg_colors[GRID_ROWS]; /* row background colors */
 static lv_obj_t   *s_bg_bands[GRID_ROWS];      /* full-width background bands */
@@ -191,47 +188,31 @@ static void slider_changed_cb(lv_event_t *e)
     update_cell(idx);
 }
 
-/* Called when a radio button is tapped – enforces mutual exclusivity */
-static void radio_cb(lv_event_t *e)
-{
-    uint32_t ud = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
-    int cell_idx  = (int)(ud >> 16);
-    int radio_idx = (int)(ud & 0xFFFFu);
+/* ── stale-data check timer (1 Hz) ──────────────────────────────────── */
 
-    s_cells[cell_idx].decay_rate = radio_idx;
-
-    /* Ensure exactly the selected button is checked */
-    for (int r = 0; r < 3; r++) {
-        if (r == radio_idx) {
-            lv_obj_add_state(s_cells[cell_idx].radio[r], LV_STATE_CHECKED);
-        } else {
-            lv_obj_clear_state(s_cells[cell_idx].radio[r], LV_STATE_CHECKED);
-        }
-    }
-}
-
-/* 1-second periodic timer – decrements bar values according to decay rate */
-static void decay_cb(lv_timer_t *t)
+/*
+ * Runs every second inside the LVGL task.
+ * For each cell that has received at least one MQTT update, checks whether
+ * the last update was more than STALE_THRESHOLD_US ago.  If so, the count
+ * label is changed to "---" in grey to indicate stale data.
+ */
+static void stale_check_cb(lv_timer_t *t)
 {
     (void)t;
-    s_decay_tick++;
-
+    int64_t now_us = esp_timer_get_time();
     for (int i = 0; i < BAR_COUNT; i++) {
-        if (s_cells[i].value <= 0) continue;
+        if (!s_cells[i].data_received) continue;
 
-        bool do_dec = false;
-        if (s_cells[i].decay_rate == 2) {
-            do_dec = true;                          /* −1 every second */
-        } else if (s_cells[i].decay_rate == 1 && (s_decay_tick & 1u) == 0u) {
-            do_dec = true;                          /* −1 every 2 seconds */
-        }
+        bool is_stale = (now_us - s_cells[i].last_update_us) >= STALE_THRESHOLD_US;
+        if (is_stale == s_cells[i].stale) continue;   /* no change */
 
-        if (do_dec) {
-            s_cells[i].value--;
-            if (s_cells[i].value < 0) s_cells[i].value = 0;
-            lv_slider_set_value(s_cells[i].slider, s_cells[i].value, LV_ANIM_OFF);
-            update_cell(i);
+        s_cells[i].stale = is_stale;
+        if (is_stale) {
+            lv_label_set_text(s_cells[i].count_lbl, "---");
+            lv_obj_set_style_text_color(s_cells[i].count_lbl,
+                                        lv_color_make(150, 150, 150), 0);
         }
+        /* Non-stale restore is handled by ui_update_zone_count() */
     }
 }
 
@@ -415,14 +396,14 @@ void app_ui_init(void)
     lv_obj_set_layout(grid, LV_LAYOUT_GRID);
     lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);
 
-    static const char *radio_labels[] = {"0", "1", "2"};
-
     for (int i = 0; i < BAR_COUNT; i++) {
         int col = i % GRID_COLS;
         int row = i / GRID_COLS;
 
-        s_cells[i].value      = 0;
-        s_cells[i].decay_rate = 0;
+        s_cells[i].value         = 0;
+        s_cells[i].last_update_us = 0;
+        s_cells[i].data_received  = false;
+        s_cells[i].stale          = false;
 
         /* ── Cell container ───────────────────────────────────────── */
         lv_obj_t *cell = lv_obj_create(grid);
@@ -473,56 +454,83 @@ void app_ui_init(void)
         /* Shimmer stripe – "charging battery" wave sweeping left-to-right */
         add_shimmer(slider, i, false);
 
-        /* ── Radio-button row (decay rate 0 / 1 / 2) ─────────────── */
-        lv_obj_t *radio_row = lv_obj_create(cell);
-        lv_obj_set_size(radio_row, lv_pct(100), LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_opa(radio_row, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(radio_row, 0, 0);
-        lv_obj_set_style_pad_all(radio_row, 2, 0);
-        lv_obj_set_style_pad_column(radio_row, 2, 0);
-        lv_obj_clear_flag(radio_row, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_layout(radio_row, LV_LAYOUT_FLEX);
-        lv_obj_set_flex_flow(radio_row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(radio_row,
-                              LV_FLEX_ALIGN_SPACE_EVENLY,
-                              LV_FLEX_ALIGN_CENTER,
-                              LV_FLEX_ALIGN_CENTER);
-
-        for (int r = 0; r < 3; r++) {
-            /* Rectangular button (SQBTN_W × SQBTN_H) with label centered inside */
-            lv_obj_t *rb = lv_obj_create(radio_row);
-            lv_obj_set_size(rb, SQBTN_W, SQBTN_H);
-            lv_obj_set_style_radius(rb, 0, LV_PART_MAIN);
-            lv_obj_set_style_bg_color(rb, lv_color_make(50, 50, 70),
-                                      LV_PART_MAIN);
-            lv_obj_set_style_bg_color(rb, lv_color_make(100, 200, 100),
-                                      LV_PART_MAIN | LV_STATE_CHECKED);
-            lv_obj_set_style_border_color(rb, lv_color_make(120, 120, 150),
-                                          LV_PART_MAIN);
-            lv_obj_set_style_border_width(rb, 2, LV_PART_MAIN);
-            lv_obj_add_flag(rb, LV_OBJ_FLAG_CHECKABLE);
-            lv_obj_clear_flag(rb, LV_OBJ_FLAG_SCROLLABLE);
-
-            lv_obj_t *lbl = lv_label_create(rb);
-            lv_label_set_text(lbl, radio_labels[r]);
-            lv_obj_set_style_text_color(lbl,
-                lv_color_make(SQBTN_LABEL_R, SQBTN_LABEL_G, SQBTN_LABEL_B), 0);
-            lv_obj_center(lbl);
-
-            /* Rate 0 is selected by default */
-            if (r == 0) {
-                lv_obj_add_state(rb, LV_STATE_CHECKED);
-            }
-            uint32_t ud = ((uint32_t)i << 16) | (uint32_t)r;
-            lv_obj_add_event_cb(rb, radio_cb, LV_EVENT_VALUE_CHANGED,
-                                (void *)(uintptr_t)ud);
-            s_cells[i].radio[r] = rb;
-        }
+        /* ── Count label – shows numeric MQTT count below the bar ─── */
+        lv_obj_t *count_lbl = lv_label_create(cell);
+        lv_label_set_text(count_lbl, "0");
+        lv_obj_set_style_text_color(count_lbl, lv_color_white(), 0);
+        lv_obj_set_style_text_font(count_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_align(count_lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(count_lbl, lv_pct(100));
+        s_cells[i].count_lbl = count_lbl;
     }
 
-    /* ── Decay timer: fires every 1 second ────────────────────────── */
-    s_decay_timer = lv_timer_create(decay_cb, 1000, NULL);
+    /* ── Stale-check timer: fires every 1 second ───────────────────── */
+    s_stale_timer = lv_timer_create(stale_check_cb, 1000, NULL);
 
     /* ── Shimmer timer: advances the wave stripes at ~25 fps ────── */
     s_shimmer_timer = lv_timer_create(shimmer_timer_cb, SHIMMER_TICK_MS, NULL);
+}
+
+/* ── MQTT-driven zone count update ──────────────────────────────────── */
+
+/*
+ * Map (level, zone) to flat cell index in the 3×3 grid.
+ *
+ * Grid layout (top → bottom):
+ *   row 0 = 3rd Level : Zone 1, Zone 2, Zone 3  (col 0, 1, 2)
+ *   row 1 = 2nd Level : Zone 3, Zone 2, Zone 1  (col 0, 1, 2 – reversed)
+ *   row 2 = 1st Level : Zone 1, Zone 2, Zone 3  (col 0, 1, 2)
+ *
+ * Returns -1 for out-of-range inputs.
+ */
+static int zone_to_cell(int level, int zone)
+{
+    if (level < 1 || level > 3) return -1;
+    if (zone  < 1 || zone  > 3) return -1;
+
+    int row = 3 - level;   /* level 1 → row 2, level 2 → row 1, level 3 → row 0 */
+    int col;
+    if (level == 2) {
+        col = 3 - zone;    /* 2nd Level is reversed: zone 1→col2, zone 3→col0 */
+    } else {
+        col = zone - 1;    /* 1st / 3rd Level: zone 1→col0, zone 3→col2 */
+    }
+    return row * GRID_COLS + col;
+}
+
+/*
+ * Update the fill-bar and count label for the given level/zone with a new
+ * MQTT count value.  Safe to call from any FreeRTOS task; acquires the LVGL
+ * mutex internally.
+ */
+void ui_update_zone_count(int level, int zone, int count)
+{
+    int idx = zone_to_cell(level, zone);
+    if (idx < 0) return;
+
+    /* Clamp value for the bar (0–VALUE_MAX); label shows the raw count */
+    int32_t bar_val = count;
+    if (bar_val < 0)         bar_val = 0;
+    if (bar_val > VALUE_MAX) bar_val = VALUE_MAX;
+
+    /* Record update timestamp before taking the LVGL lock so the stale
+     * timer never races with a fresh write.                              */
+    s_cells[idx].last_update_us = esp_timer_get_time();
+    s_cells[idx].data_received  = true;
+
+    if (lvgl_port_lock(LVGL_LOCK_TIMEOUT_MS)) {
+        s_cells[idx].value = bar_val;
+        s_cells[idx].stale = false;
+
+        lv_slider_set_value(s_cells[idx].slider, bar_val, LV_ANIM_OFF);
+        update_cell(idx);
+
+        /* Update count label with the raw (unclamped) value */
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d", count);
+        lv_label_set_text(s_cells[idx].count_lbl, buf);
+        lv_obj_set_style_text_color(s_cells[idx].count_lbl, lv_color_white(), 0);
+
+        lvgl_port_unlock();
+    }
 }
