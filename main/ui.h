@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdbool.h>
+
 /**
  * @brief Initialize the 3×3 fill-bar grid UI.
  *
@@ -18,6 +20,9 @@
  *
  * Background: soft cornflower-blue normally; flashes red/blue at 2 Hz
  * while any bar is at 40.
+ *
+ * A 26 px status bar is rendered at the bottom showing WiFi / IP / MQTT
+ * connection state and MQTT receive activity.
  */
 void app_ui_init(void);
 
@@ -33,3 +38,31 @@ void app_ui_init(void);
  *               to [0, 40]; the count label shows the raw integer.
  */
 void ui_update_zone_count(int level, int zone, int count);
+
+/**
+ * @brief Update the WiFi status indicator in the status bar.
+ *
+ * Safe to call from any FreeRTOS task; acquires the LVGL mutex internally.
+ *
+ * @param connected  true once a valid IP address has been obtained.
+ * @param ip_str     Null-terminated IP string (e.g. "192.168.1.5"), or NULL
+ *                   when not connected.
+ */
+void ui_set_wifi_status(bool connected, const char *ip_str);
+
+/**
+ * @brief Update the MQTT broker connection indicator in the status bar.
+ *
+ * Safe to call from any FreeRTOS task; acquires the LVGL mutex internally.
+ *
+ * @param connected  true while the MQTT client has an active broker session.
+ */
+void ui_set_mqtt_status(bool connected);
+
+/**
+ * @brief Signal that an MQTT message was just received from the publisher.
+ *
+ * Lights the RX indicator in the status bar green for ~2 seconds, then dims
+ * it automatically.  Safe to call from any FreeRTOS task.
+ */
+void ui_notify_mqtt_rx(void);

@@ -1,5 +1,6 @@
 #include "wifi_manager.h"
 #include "mqtt_handler.h"
+#include "ui.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -16,10 +17,16 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT &&
                event_id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGW(TAG_WIFI, "WiFi disconnected, retrying...");
+        ui_set_wifi_status(false, NULL);
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG_WIFI, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        char ip_str[16];
+        /* lv_label_set_text() copies the string internally, so a stack
+         * buffer is safe here. */
+        snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&event->ip_info.ip));
+        ui_set_wifi_status(true, ip_str);
         mqtt_handler_start();
     }
 }
