@@ -33,6 +33,10 @@
 #include "lvgl.h"
 #include "lvgl_port.h"
 #include "esp_timer.h"
+#include "esp_log.h"
+#include <inttypes.h>
+
+#define TAG_UI "ui"
 
 /* ── constants ──────────────────────────────────────────────────────── */
 #define BAR_COUNT  9
@@ -107,6 +111,12 @@ static lv_obj_t   *s_status_ip_lbl   = NULL;  /* IP address string          */
 static lv_obj_t   *s_status_mqtt_lbl = NULL;  /* MQTT connected indicator   */
 static lv_obj_t   *s_status_rx_lbl   = NULL;  /* MQTT RX activity indicator */
 static lv_timer_t *s_rx_dim_timer    = NULL;  /* dims RX indicator after 2 s */
+static lv_obj_t   *s_status_upd_lbl  = NULL;  /* successful UI update count */
+
+/* Counts how many times ui_update_zone_count() successfully held the LVGL
+ * lock and wrote slider+label values.  Visible on the status bar as "UPD:N".
+ * Wraps naturally at UINT32_MAX. */
+static uint32_t    s_upd_count       = 0;
 
 /* ── colour helpers ─────────────────────────────────────────────────── */
 static lv_color_t value_to_color(int32_t v)
@@ -539,6 +549,17 @@ void app_ui_init(void)
     lv_obj_align(mqtt_lbl, LV_ALIGN_CENTER, 0, 0);
     s_status_mqtt_lbl = mqtt_lbl;
 
+    /* Diagnostic update counter (between MQTT centre and RX right).
+     * Shows how many times ui_update_zone_count() successfully wrote
+     * slider/label values through the LVGL lock.  If MQTT is "OK" but
+     * this stays at 0 the lock is timing out. */
+    lv_obj_t *upd_lbl = lv_label_create(status_bar);
+    lv_label_set_text(upd_lbl, "UPD:0");
+    lv_obj_set_style_text_color(upd_lbl, lv_color_make(130, 130, 130), 0);
+    lv_obj_set_style_text_font(upd_lbl, &lv_font_montserrat_12, 0);
+    lv_obj_align(upd_lbl, LV_ALIGN_CENTER, 80, 0);
+    s_status_upd_lbl = upd_lbl;
+
     /* ── Stale-check timer: fires every 1 second ───────────────────── */
     s_stale_timer = lv_timer_create(stale_check_cb, 1000, NULL);
 
@@ -581,12 +602,18 @@ static int zone_to_cell(int level, int zone)
 void ui_update_zone_count(int level, int zone, int count)
 {
     int idx = zone_to_cell(level, zone);
-    if (idx < 0) return;
+    if (idx < 0) {
+        ESP_LOGW(TAG_UI, "zone_to_cell returned -1 for L%d Z%d – ignoring", level, zone);
+        return;
+    }
 
     /* Clamp value for the bar (0–VALUE_MAX); label shows the raw count */
     int32_t bar_val = count;
     if (bar_val < 0)         bar_val = 0;
     if (bar_val > VALUE_MAX) bar_val = VALUE_MAX;
+
+    ESP_LOGD(TAG_UI, "update L%d Z%d cnt=%d → cell[%d] bar=%"PRId32,
+             level, zone, count, idx, bar_val);
 
     /* Record update timestamp before taking the LVGL lock so the stale
      * timer never races with a fresh write.                              */
@@ -606,7 +633,20 @@ void ui_update_zone_count(int level, int zone, int count)
         lv_label_set_text(s_cells[idx].count_lbl, buf);
         lv_obj_set_style_text_color(s_cells[idx].count_lbl, lv_color_white(), 0);
 
+        /* Advance on-screen diagnostic counter */
+        s_upd_count++;
+        if (s_status_upd_lbl) {
+            char ubuf[16];
+            snprintf(ubuf, sizeof(ubuf), "UPD:%"PRIu32, s_upd_count);
+            lv_label_set_text(s_status_upd_lbl, ubuf);
+            lv_obj_set_style_text_color(s_status_upd_lbl,
+                                        lv_color_make(0, 200, 80), 0);
+        }
+
         lvgl_port_unlock();
+    } else {
+        ESP_LOGW(TAG_UI, "LVGL lock timeout – update dropped (L%d Z%d cnt=%d cell[%d])",
+                 level, zone, count, idx);
     }
 }
 
