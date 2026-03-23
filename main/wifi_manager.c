@@ -1,5 +1,4 @@
 #include "wifi_manager.h"
-#include "wifi_credentials.h"
 #include "mqtt_handler.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -39,8 +38,8 @@ void wifi_manager_start(void)
 
     wifi_config_t wifi_cfg = {
         .sta = {
-            .ssid     = WIFI_SSID,
-            .password = WIFI_PASSWORD,
+            .ssid     = CONFIG_MQTT_WIFI_SSID,
+            .password = CONFIG_MQTT_WIFI_PASSWORD,
             /* Disable fast-connect so the driver performs a full scan on
              * each reconnect – more reliable in congested environments.  */
             .scan_method = WIFI_ALL_CHANNEL_SCAN,
@@ -52,5 +51,5 @@ void wifi_manager_start(void)
     ESP_ERROR_CHECK(esp_wifi_start());
 
     ESP_LOGI(TAG_WIFI, "WiFi started, connecting to \"%s\"...",
-             WIFI_SSID);
+             CONFIG_MQTT_WIFI_SSID);
 }

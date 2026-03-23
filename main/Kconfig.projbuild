@@ -117,18 +117,21 @@ menu "Example Configuration"
 
     menu "Network / MQTT"
         config MQTT_WIFI_SSID
-            string "WiFi SSID (unused – see main/wifi_credentials.h)"
+            string "WiFi SSID"
             default ""
             help
-                Credentials are read from main/wifi_credentials.h at compile time.
-                Copy main/wifi_credentials.h.example to main/wifi_credentials.h
-                and fill in your SSID and password there.
+                SSID of the WiFi access point to connect to.
+                Set this via 'idf.py menuconfig' or add it to a local
+                sdkconfig file.  The sdkconfig file is git-ignored, so
+                credentials will not be committed to the repository.
 
         config MQTT_WIFI_PASSWORD
-            string "WiFi Password (unused – see main/wifi_credentials.h)"
+            string "WiFi Password"
             default ""
             help
-                Credentials are read from main/wifi_credentials.h at compile time.
-                See CONFIG_MQTT_WIFI_SSID for details.
+                Password for the WiFi access point.
+                Set this via 'idf.py menuconfig' or add it to a local
+                sdkconfig file.  The sdkconfig file is git-ignored, so
+                credentials will not be committed to the repository.
     endmenu
 endmenu
