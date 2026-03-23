@@ -4,6 +4,9 @@ sdkconfig
 sdkconfig.old
 managed_components/
 
+# WiFi credentials – copy main/wifi_credentials.h.example to this file and fill in your SSID/password
+main/wifi_credentials.h
+
 # VS Code
 .vscode/*.log
 
