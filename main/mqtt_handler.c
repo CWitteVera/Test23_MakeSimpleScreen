@@ -48,10 +48,12 @@ static void mqtt_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(TAG_MQTT, "Connected to broker");
         esp_mqtt_client_subscribe(s_mqtt_client, MQTT_SUBSCRIBE_TOPIC, 1);
         ESP_LOGI(TAG_MQTT, "Subscribed to \"%s\"", MQTT_SUBSCRIBE_TOPIC);
+        ui_set_mqtt_status(true);
         break;
 
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGW(TAG_MQTT, "Disconnected from broker (auto-reconnect active)");
+        ui_set_mqtt_status(false);
         break;
 
     case MQTT_EVENT_DATA: {
@@ -81,6 +83,7 @@ static void mqtt_event_handler(void *arg, esp_event_base_t event_base,
             int count = (int)j_count->valuedouble;
             ESP_LOGI(TAG_MQTT, "Level %d Zone %d count=%d", level, zone, count);
             ui_update_zone_count(level, zone, count);
+            ui_notify_mqtt_rx();
         } else {
             ESP_LOGW(TAG_MQTT, "JSON missing required fields – ignoring");
         }

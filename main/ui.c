@@ -40,6 +40,9 @@
 #define GRID_ROWS  3
 #define VALUE_MAX  40
 
+/* Status bar at the bottom of the screen */
+#define STATUS_BAR_H   26
+
 /* Staleness threshold: 10 seconds in microseconds */
 #define STALE_THRESHOLD_US  (10LL * 1000000LL)
 
@@ -97,6 +100,13 @@ static lv_timer_t *s_stale_timer   = NULL;
 static lv_timer_t *s_shimmer_timer = NULL;
 static lv_color_t  s_row_bg_colors[GRID_ROWS]; /* row background colors */
 static lv_obj_t   *s_bg_bands[GRID_ROWS];      /* full-width background bands */
+
+/* ── status bar widgets ─────────────────────────────────────────────── */
+static lv_obj_t   *s_status_wifi_lbl = NULL;  /* WiFi symbol + state        */
+static lv_obj_t   *s_status_ip_lbl   = NULL;  /* IP address string          */
+static lv_obj_t   *s_status_mqtt_lbl = NULL;  /* MQTT connected indicator   */
+static lv_obj_t   *s_status_rx_lbl   = NULL;  /* MQTT RX activity indicator */
+static lv_timer_t *s_rx_dim_timer    = NULL;  /* dims RX indicator after 2 s */
 
 /* ── colour helpers ─────────────────────────────────────────────────── */
 static lv_color_t value_to_color(int32_t v)
@@ -304,6 +314,24 @@ static void add_shimmer(lv_obj_t *slider, int idx, bool rtl)
     s_cells[idx].shimmer_rtl    = rtl;
 }
 
+/* ── RX dim callback ─────────────────────────────────────────────────── */
+
+/*
+ * Fires 2 s after the last MQTT message was received; dims the RX dot.
+ * The timer is created without a fixed repeat count and is explicitly
+ * deleted here so there is no ambiguity about when LVGL releases it.
+ */
+static void rx_dim_cb(lv_timer_t *t)
+{
+    lv_timer_del(t);     /* explicit one-shot: delete before touching UI */
+    s_rx_dim_timer = NULL;
+    if (s_status_rx_lbl) {
+        lv_label_set_text(s_status_rx_lbl, "RX: --");
+        lv_obj_set_style_text_color(s_status_rx_lbl,
+                                    lv_color_make(130, 130, 130), 0);
+    }
+}
+
 /* ── public API ──────────────────────────────────────────────────────── */
 void app_ui_init(void)
 {
@@ -464,6 +492,53 @@ void app_ui_init(void)
         s_cells[i].count_lbl = count_lbl;
     }
 
+    /* ── Status bar: 26 px strip at the very bottom of the screen ──── */
+    lv_obj_t *status_bar = lv_obj_create(scr);
+    lv_obj_add_flag(status_bar, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_clear_flag(status_bar,
+                      LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_pos(status_bar, 0, LVGL_PORT_V_RES - STATUS_BAR_H);
+    lv_obj_set_size(status_bar, LVGL_PORT_H_RES, STATUS_BAR_H);
+    lv_obj_set_style_bg_color(status_bar, lv_color_make(10, 20, 40), 0);
+    lv_obj_set_style_bg_opa(status_bar, LV_OPA_90, 0);
+    lv_obj_set_style_border_color(status_bar, lv_color_make(60, 90, 150), 0);
+    lv_obj_set_style_border_width(status_bar, 1, 0);
+    lv_obj_set_style_border_side(status_bar, LV_BORDER_SIDE_TOP, 0);
+    lv_obj_set_style_radius(status_bar, 0, 0);
+    lv_obj_set_style_pad_all(status_bar, 3, 0);
+
+    /* WiFi symbol + connection state (left-aligned) */
+    lv_obj_t *wifi_lbl = lv_label_create(status_bar);
+    lv_label_set_text(wifi_lbl, LV_SYMBOL_WIFI "  No WiFi");
+    lv_obj_set_style_text_color(wifi_lbl, lv_color_make(130, 130, 130), 0);
+    lv_obj_set_style_text_font(wifi_lbl, &lv_font_montserrat_12, 0);
+    lv_obj_align(wifi_lbl, LV_ALIGN_LEFT_MID, 4, 0);
+    s_status_wifi_lbl = wifi_lbl;
+
+    /* IP address label (immediately right of the WiFi label) */
+    lv_obj_t *ip_lbl = lv_label_create(status_bar);
+    lv_label_set_text(ip_lbl, "");
+    lv_obj_set_style_text_color(ip_lbl, lv_color_make(200, 200, 200), 0);
+    lv_obj_set_style_text_font(ip_lbl, &lv_font_montserrat_12, 0);
+    lv_obj_align_to(ip_lbl, wifi_lbl, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+    s_status_ip_lbl = ip_lbl;
+
+    /* MQTT RX indicator (right-aligned) */
+    lv_obj_t *rx_lbl = lv_label_create(status_bar);
+    lv_label_set_text(rx_lbl, "RX: --");
+    lv_obj_set_style_text_color(rx_lbl, lv_color_make(130, 130, 130), 0);
+    lv_obj_set_style_text_font(rx_lbl, &lv_font_montserrat_12, 0);
+    lv_obj_align(rx_lbl, LV_ALIGN_RIGHT_MID, -4, 0);
+    s_status_rx_lbl = rx_lbl;
+
+    /* MQTT connection indicator (immediately left of the RX label) */
+    lv_obj_t *mqtt_lbl = lv_label_create(status_bar);
+    lv_label_set_text(mqtt_lbl, "MQTT: --");
+    lv_obj_set_style_text_color(mqtt_lbl, lv_color_make(130, 130, 130), 0);
+    lv_obj_set_style_text_font(mqtt_lbl, &lv_font_montserrat_12, 0);
+    lv_obj_align_to(mqtt_lbl, rx_lbl, LV_ALIGN_OUT_LEFT_MID, -12, 0);
+    s_status_mqtt_lbl = mqtt_lbl;
+
     /* ── Stale-check timer: fires every 1 second ───────────────────── */
     s_stale_timer = lv_timer_create(stale_check_cb, 1000, NULL);
 
@@ -530,6 +605,86 @@ void ui_update_zone_count(int level, int zone, int count)
         snprintf(buf, sizeof(buf), "%d", count);
         lv_label_set_text(s_cells[idx].count_lbl, buf);
         lv_obj_set_style_text_color(s_cells[idx].count_lbl, lv_color_white(), 0);
+
+        lvgl_port_unlock();
+    }
+}
+
+/* ── Status bar public API ───────────────────────────────────────────── */
+
+/*
+ * Update the WiFi symbol and IP address in the status bar.
+ * Call from wifi_manager on IP_EVENT_STA_GOT_IP (connected=true) and
+ * WIFI_EVENT_STA_DISCONNECTED (connected=false).
+ */
+void ui_set_wifi_status(bool connected, const char *ip_str)
+{
+    if (!s_status_wifi_lbl) return;
+
+    if (lvgl_port_lock(LVGL_LOCK_TIMEOUT_MS)) {
+        if (connected) {
+            lv_label_set_text(s_status_wifi_lbl, LV_SYMBOL_WIFI "  Connected");
+            lv_obj_set_style_text_color(s_status_wifi_lbl,
+                                        lv_color_make(0, 200, 80), 0);
+            lv_label_set_text(s_status_ip_lbl, ip_str ? ip_str : "");
+        } else {
+            lv_label_set_text(s_status_wifi_lbl, LV_SYMBOL_WIFI "  No WiFi");
+            lv_obj_set_style_text_color(s_status_wifi_lbl,
+                                        lv_color_make(130, 130, 130), 0);
+            lv_label_set_text(s_status_ip_lbl, "");
+        }
+        /* Re-align IP label after the WiFi label text may have changed width */
+        lv_obj_align_to(s_status_ip_lbl, s_status_wifi_lbl,
+                        LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+        lvgl_port_unlock();
+    }
+}
+
+/*
+ * Update the MQTT broker connection indicator.
+ * Call from mqtt_handler on MQTT_EVENT_CONNECTED (connected=true) and
+ * MQTT_EVENT_DISCONNECTED (connected=false).
+ */
+void ui_set_mqtt_status(bool connected)
+{
+    if (!s_status_mqtt_lbl) return;
+
+    if (lvgl_port_lock(LVGL_LOCK_TIMEOUT_MS)) {
+        if (connected) {
+            lv_label_set_text(s_status_mqtt_lbl, "MQTT: OK");
+            lv_obj_set_style_text_color(s_status_mqtt_lbl,
+                                        lv_color_make(0, 200, 80), 0);
+        } else {
+            lv_label_set_text(s_status_mqtt_lbl, "MQTT: --");
+            lv_obj_set_style_text_color(s_status_mqtt_lbl,
+                                        lv_color_make(130, 130, 130), 0);
+        }
+        lvgl_port_unlock();
+    }
+}
+
+/*
+ * Signal that an MQTT message was just received from the publisher.
+ * Lights the RX indicator green; an internal timer dims it after 2 seconds.
+ */
+void ui_notify_mqtt_rx(void)
+{
+    if (!s_status_rx_lbl) return;
+
+    if (lvgl_port_lock(LVGL_LOCK_TIMEOUT_MS)) {
+        lv_label_set_text(s_status_rx_lbl, "RX: " LV_SYMBOL_OK);
+        lv_obj_set_style_text_color(s_status_rx_lbl,
+                                    lv_color_make(0, 200, 80), 0);
+
+        /* Restart (or start) the 2 s dim timer.
+         * Both paths run under the LVGL lock, so s_rx_dim_timer is always
+         * consistent with whether the timer object is alive. */
+        if (s_rx_dim_timer) {
+            lv_timer_reset(s_rx_dim_timer);
+        } else {
+            s_rx_dim_timer = lv_timer_create(rx_dim_cb, 2000, NULL);
+            /* No repeat_count set – the callback deletes the timer itself */
+        }
 
         lvgl_port_unlock();
     }
