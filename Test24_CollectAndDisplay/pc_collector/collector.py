@@ -23,12 +23,19 @@ import csv
 import json
 import logging
 import os
+import re
 import sys
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    import paho.mqtt.client as mqtt
+    _MQTT_AVAILABLE = True
+except ImportError:
+    _MQTT_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -286,6 +293,105 @@ class Historian:
             self._fh.close()
 
 # ---------------------------------------------------------------------------
+# MQTT publisher
+# ---------------------------------------------------------------------------
+
+_ZONE_KEY_RE = re.compile(r'^L(\d+)Z(\d+)$')
+
+
+def _parse_zone_key(zone_key: str) -> Optional[Tuple[int, int]]:
+    """Parse 'L1Z2' into (level=1, zone=2). Returns None if the key is invalid."""
+    m = _ZONE_KEY_RE.match(zone_key)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2))
+
+
+class MqttPublisher:
+    """
+    Publishes zone counts to the MQTT broker so the ESP32 display can consume
+    them.
+
+    Each zone is published to:
+        <topic_prefix>/level<N>/zone<M>/counts
+
+    The JSON payload matches what mqtt_handler.c on the ESP32 expects:
+        {"level": N, "zone": M, "current_count": K}
+
+    Uses paho-mqtt in a background network thread (loop_start) so that
+    publishes are non-blocking for the main poll loop.
+    """
+
+    def __init__(self, broker: str, port: int, topic_prefix: str,
+                 keepalive_s: int = 60):
+        if not _MQTT_AVAILABLE:
+            raise RuntimeError(
+                "paho-mqtt is not installed. "
+                "Run: pip install paho-mqtt>=1.6"
+            )
+        self._broker = broker
+        self._port = port
+        self._prefix = topic_prefix
+        self._keepalive = keepalive_s
+        self._client = self._make_client()
+
+    @staticmethod
+    def _make_client():
+        """Create a paho Client compatible with both paho-mqtt 1.x and 2.x."""
+        import socket
+        unique_id = f"conveyor-collector-{socket.gethostname()}"
+        try:
+            # paho-mqtt 2.x requires an explicit CallbackAPIVersion
+            return mqtt.Client(
+                mqtt.CallbackAPIVersion.VERSION2,
+                client_id=unique_id,
+            )
+        except AttributeError:
+            # paho-mqtt 1.x does not have CallbackAPIVersion
+            return mqtt.Client(client_id=unique_id)
+
+    def connect(self) -> bool:
+        """Connect to the broker and start the background network loop."""
+        try:
+            self._client.connect(self._broker, self._port,
+                                 keepalive=self._keepalive)
+            self._client.loop_start()
+            log.info("MQTT publisher connected to %s:%d", self._broker,
+                     self._port)
+            return True
+        except Exception as exc:
+            log.error("MQTT publisher could not connect to %s:%d – %s",
+                      self._broker, self._port, exc)
+            return False
+
+    def publish_counts(self, counts: Dict[str, int]) -> None:
+        """Publish all zone counts to the broker (QoS 1)."""
+        for zone_key, count in counts.items():
+            parsed = _parse_zone_key(zone_key)
+            if parsed is None:
+                log.debug("Skipping unrecognised zone key '%s'", zone_key)
+                continue
+            level, zone = parsed
+            topic = f"{self._prefix}/level{level}/zone{zone}/counts"
+            payload = json.dumps({
+                "level": level,
+                "zone": zone,
+                "current_count": count,
+            })
+            result = self._client.publish(topic, payload, qos=1)
+            if result.rc != 0:
+                log.warning("MQTT publish to '%s' failed (rc=%d)", topic,
+                            result.rc)
+        log.debug("Published %d zone counts to MQTT", len(counts))
+
+    def disconnect(self) -> None:
+        """Stop the background loop and disconnect cleanly."""
+        self._client.loop_stop()
+        self._client.disconnect()
+        log.info("MQTT publisher disconnected")
+
+
+# ---------------------------------------------------------------------------
 # Display / summary
 # ---------------------------------------------------------------------------
 
@@ -315,15 +421,38 @@ def print_zone_summary(counts: Dict[str, int]) -> None:
 def run(config_dir: Path) -> None:
     plc_cfg, sensors = load_config(config_dir)
 
-    poll_interval   = plc_cfg["plc"]["poll_interval_s"]
+    poll_interval    = plc_cfg["plc"]["poll_interval_s"]
     display_interval = plc_cfg["display_update_interval_s"]
-    hist_cfg        = plc_cfg["historian"]
+    hist_cfg         = plc_cfg["historian"]
+    mqtt_cfg         = plc_cfg.get("mqtt", {})
 
     historian = Historian(
         directory=config_dir.parent / hist_cfg["directory"],
         filename_prefix=hist_cfg["filename_prefix"],
         rotate_daily=hist_cfg["rotate_daily"],
     )
+
+    # -- MQTT publisher (optional; controlled by mqtt.enabled in config) --
+    mqtt_publisher: Optional[MqttPublisher] = None
+    if mqtt_cfg.get("enabled", False):
+        if not _MQTT_AVAILABLE:
+            log.warning(
+                "MQTT publishing is enabled in config but paho-mqtt is not "
+                "installed. Run: pip install paho-mqtt>=1.6"
+            )
+        else:
+            mqtt_publisher = MqttPublisher(
+                broker=mqtt_cfg["broker"],
+                port=mqtt_cfg.get("port", 1883),
+                topic_prefix=mqtt_cfg.get("topic_prefix", "NorthPickMod"),
+                keepalive_s=mqtt_cfg.get("keepalive_s", 60),
+            )
+            if not mqtt_publisher.connect():
+                log.warning(
+                    "MQTT publisher failed to connect – zone counts will not "
+                    "be forwarded to the display."
+                )
+                mqtt_publisher = None
 
     tracker = ZoneCountTracker(sensors)
     conn    = plc_connect(plc_cfg)
@@ -359,6 +488,14 @@ def run(config_dir: Path) -> None:
             # -- Write to historian every poll cycle ---------------------
             historian.write(snapshot)
 
+            # -- Publish zone counts to MQTT every poll cycle ------------
+            if mqtt_publisher is not None:
+                try:
+                    mqtt_publisher.publish_counts(snapshot)
+                except Exception as exc:
+                    log.warning("MQTT publish error (will retry next cycle): %s",
+                                exc)
+
             # -- Print summary every display_interval seconds ------------
             now = time.monotonic()
             if now - last_display >= display_interval:
@@ -375,6 +512,8 @@ def run(config_dir: Path) -> None:
     finally:
         conn.disconnect()
         historian.close()
+        if mqtt_publisher is not None:
+            mqtt_publisher.disconnect()
         log.info("Collector stopped.")
 
 

@@ -14,5 +14,13 @@
         "filename_prefix": "conveyor_history",
         "rotate_daily": true,
         "max_file_size_mb": 50
+    },
+    "mqtt": {
+        "_comment": "Set enabled to false to disable MQTT publishing.",
+        "enabled": true,
+        "broker": "172.20.26.49",
+        "port": 1883,
+        "topic_prefix": "NorthPickMod",
+        "keepalive_s": 60
     }
 }

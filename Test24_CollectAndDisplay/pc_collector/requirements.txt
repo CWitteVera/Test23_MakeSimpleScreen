@@ -12,5 +12,5 @@
 # Modbus TCP/RTU (pymodbus):
 #   pymodbus>=3.0
 #
-# MQTT (if sending zone counts to the ESP32 display via a broker):
-#   paho-mqtt>=2.0
+# MQTT (sending zone counts to the ESP32 display via the broker):
+paho-mqtt>=1.6
