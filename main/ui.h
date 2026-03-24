@@ -7,22 +7,21 @@
  *
  * Call once, inside an lvgl_port_lock() / lvgl_port_unlock() section.
  *
- * Creates nine cells spread evenly across the 800×480 display.
- * Each cell contains:
- *   - A horizontal fill-bar slider whose indicator colour reflects the current
- *     value.  A shimmer stripe sweeps continuously across the bar in the fill
- *     direction, giving a "charging battery" wave effect.
- *   - A numeric count label that shows the last value received via MQTT.
- *     When no update has arrived for ≥10 seconds the label shows "---" in grey.
+ * Layout (800×480):
+ *   - A 30 px header bar at the top shows the title "North Pick Mod" on the
+ *     left and a colour-coded WiFi symbol on the right.  Tapping the WiFi
+ *     symbol opens a pop-up showing IP address, MQTT status, UPD count and
+ *     RX count.  WiFi symbol colour: green = WiFi+MQTT, red = WiFi only,
+ *     grey = not connected.
+ *   - Nine cells fill the remaining 450 px in a 3×3 grid.  Each cell shows
+ *     a zone label, a horizontal fill-bar slider (shimmer "charging battery"
+ *     wave), and a numeric count label (shows "---" after ≥10 s without data).
  *
  * Colour mapping: 0–20 green · 21–25 green→yellow · 26–30 yellow ·
  *                 31–35 yellow→red · 36–40 red.
  *
- * Background: soft cornflower-blue normally; flashes red/blue at 2 Hz
- * while any bar is at 40.
- *
- * A 26 px status bar is rendered at the bottom showing WiFi / IP / MQTT
- * connection state and MQTT receive activity.
+ * Background: soft cornflower-blue normally; flashes red at 2 Hz while any
+ * bar is at 40.
  */
 void app_ui_init(void);
 
@@ -40,9 +39,11 @@ void app_ui_init(void);
 void ui_update_zone_count(int level, int zone, int count);
 
 /**
- * @brief Update the WiFi status indicator in the status bar.
+ * @brief Update the WiFi status indicator in the header bar.
  *
  * Safe to call from any FreeRTOS task; acquires the LVGL mutex internally.
+ * Updates the WiFi icon colour: green when both WiFi and MQTT are connected,
+ * red when WiFi is connected but MQTT is not, grey when disconnected.
  *
  * @param connected  true once a valid IP address has been obtained.
  * @param ip_str     Null-terminated IP string (e.g. "192.168.1.5"), or NULL
@@ -51,9 +52,10 @@ void ui_update_zone_count(int level, int zone, int count);
 void ui_set_wifi_status(bool connected, const char *ip_str);
 
 /**
- * @brief Update the MQTT broker connection indicator in the status bar.
+ * @brief Update the MQTT broker connection indicator.
  *
  * Safe to call from any FreeRTOS task; acquires the LVGL mutex internally.
+ * Triggers a re-colour of the header WiFi icon.
  *
  * @param connected  true while the MQTT client has an active broker session.
  */
@@ -62,7 +64,7 @@ void ui_set_mqtt_status(bool connected);
 /**
  * @brief Signal that an MQTT message was just received from the publisher.
  *
- * Lights the RX indicator in the status bar green for ~2 seconds, then dims
- * it automatically.  Safe to call from any FreeRTOS task.
+ * Increments the diagnostic RX counter displayed in the connection-info popup.
+ * Safe to call from any FreeRTOS task.
  */
 void ui_notify_mqtt_rx(void);
